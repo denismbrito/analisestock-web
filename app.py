@@ -82,8 +82,10 @@ def extrair_acao(ticker):
         dy    = dy_f * 100 if dy_f < 1 else dy_f
 
         y_low = _safe(res.get("fiftyTwoWeekLow"))
-        var12 = round(((valor - y_low) / y_low) * 50, 2) if y_low > 0 and valor > 0 else 0.0
-        v12   = valor / (1 + var12/100) if var12 != -100 else None
+        # CORREÇÃO: Fórmula de porcentagem ajustada (*100 em vez de *50)
+        var12 = round(((valor - y_low) / y_low) * 100, 2) if y_low > 0 and valor > 0 else 0.0
+        # CORREÇÃO: Usar np.nan em vez de None
+        v12   = valor / (1 + var12/100) if var12 != -100 else np.nan
 
         pvp  = _safe(stats.get("priceToBook"))
         peg  = _safe(stats.get("pegRatio"))
@@ -120,8 +122,10 @@ def extrair_fii(ticker):
         dy    = dy_f * 100 if dy_f < 1 else dy_f
 
         y_low = _safe(res.get("fiftyTwoWeekLow"))
-        var12 = round(((valor - y_low) / y_low) * 50, 2) if y_low > 0 and valor > 0 else 0.0
-        v12   = valor / (1 + var12/100) if var12 != -100 else None
+        # CORREÇÃO: Fórmula de porcentagem ajustada (*100 em vez de *50)
+        var12 = round(((valor - y_low) / y_low) * 100, 2) if y_low > 0 and valor > 0 else 0.0
+        # CORREÇÃO: Usar np.nan em vez de None
+        v12   = valor / (1 + var12/100) if var12 != -100 else np.nan
         pvp   = _safe(stats.get("priceToBook"))
 
         return {
@@ -142,10 +146,11 @@ def extrair_fii(ticker):
 
 def scores_fiis(df):
     df = df.copy()
-    df["ScoreEvolucao"]    = (df["Valor Atual"] < df["Valor 12m Atrás"]).astype(int)
-    df["ScorePreco"]       = ((df["P/VP"] >= 0.5) & (df["P/VP"] <= 0.95)).astype(int)
-    df["ScoreVariacao12m"] = ((df["Valorização 12m (%)"] >= 1) & (df["Valorização 12m (%)"] <= 10)).astype(int)
-    df["SomaScores"]       = df["ScoreEvolucao"] + df["ScorePreco"] + df["ScoreVariacao12m"]
+    # CORREÇÃO: Usando np.where para lidar graciosamente com valores nulos, idêntico às ações
+    df["ScoreEvolucao"]    = np.where(df["Valor Atual"] < df["Valor 12m Atrás"], 1, 0)
+    df["ScorePreco"]       = np.where((df["P/VP"] >= 0.5) & (df["P/VP"] <= 0.95), 1, 0)
+    df["ScoreVariacao12m"] = np.where((df["Valorização 12m (%)"] >= 1) & (df["Valorização 12m (%)"] <= 10), 1, 0)
+    df["SomaScores"]       = df[["ScoreEvolucao", "ScorePreco", "ScoreVariacao12m"]].sum(axis=1)
     return df
 
 def scores_acoes(df):
@@ -258,13 +263,13 @@ if rodar:
         for i, t in enumerate(tickers):
             p.progress((i+1)/len(tickers), text=f"🔍 {t}")
             r = extrair_acao(t)
-            (erros if "_erro" in r else dados).append(r if "_erro" in r else r)
+            (erros if "_erro" in r else dados).append(r)
             time.sleep(0.2)
         p.empty()
-        # separa erros corretamente
+        
         dados_ok  = [r for r in dados if "_erro" not in r]
-        erros_ok  = [(r["Ticker"], r["_erro"]) for r in dados if "_erro" in r]
-        erros_ok += erros
+        # CORREÇÃO: Transformar os erros em tuplas para não bugar o exibidor de erros
+        erros_ok  = [(e["Ticker"], e["_erro"]) for e in erros]
 
         if dados_ok:
             df_a = pd.DataFrame(dados_ok)
@@ -286,9 +291,10 @@ if rodar:
             (erros if "_erro" in r else dados).append(r)
             time.sleep(0.2)
         p.empty()
+        
         dados_ok  = [r for r in dados if "_erro" not in r]
-        erros_ok  = [(r["Ticker"], r["_erro"]) for r in dados if "_erro" in r]
-        erros_ok += erros
+        # CORREÇÃO: Transformar os erros em tuplas para não bugar o exibidor de erros
+        erros_ok  = [(e["Ticker"], e["_erro"]) for e in erros]
 
         if dados_ok:
             df_f = pd.DataFrame(dados_ok)
@@ -387,6 +393,8 @@ with tab_f:
               "P/VP":"{:.2f}","Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
         st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3),
                      use_container_width=True, height=420)
+        # CORREÇÃO: Adicionado a legenda de cores e magic number que faltava na aba de FIIs
+        st.markdown('<div class="score-legend">🟢 <b>3</b> excelente &nbsp;|&nbsp; 🟡 <b>2</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo dos critérios &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "fiis.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
