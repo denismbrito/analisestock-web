@@ -1,6 +1,6 @@
 """
-AnáliseStock — Streamlit App
-Página web responsiva para análise de Ações e FIIs da B3.
+AnáliseStock — Streamlit App v2
+Fonte de dados: brapi.dev (API REST — sem scraping, sem bloqueio de IP)
 """
 
 import streamlit as st
@@ -10,10 +10,7 @@ import math
 import time
 import io
 import requests
-from bs4 import BeautifulSoup
-import re
 
-# ─── Configuração da página ──────────────────────────────────────────────────
 st.set_page_config(
     page_title="AnáliseStock",
     page_icon="📈",
@@ -21,788 +18,405 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── CSS customizado ─────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
-
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: #0f1923;
-}
-[data-testid="stSidebar"] * {
-    color: #e2e8f0 !important;
-}
-[data-testid="stSidebar"] .stMarkdown h2 {
-    font-family: 'DM Serif Display', serif;
-    color: #f0c040 !important;
-    font-size: 1.4rem;
-    border-bottom: 1px solid #2d3748;
-    padding-bottom: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-/* Header principal */
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+[data-testid="stSidebar"] { background: #0f1923; }
+[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
 .main-header {
-    background: linear-gradient(135deg, #0f1923 0%, #1a2d40 100%);
-    color: white;
-    padding: 2rem 2.5rem;
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
+    background: linear-gradient(135deg,#0f1923 0%,#1a2d40 100%);
+    padding: 2rem 2.5rem; border-radius: 12px; margin-bottom: 1.5rem;
     border-left: 4px solid #f0c040;
 }
-.main-header h1 {
-    font-family: 'DM Serif Display', serif;
-    font-size: 2.2rem;
-    margin: 0;
-    color: #f0c040;
-}
-.main-header p {
-    margin: 0.3rem 0 0;
-    color: #94a3b8;
-    font-size: 0.95rem;
-}
-
-/* Cards de métricas */
-.metric-card {
-    background: white;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    padding: 1rem 1.2rem;
-    text-align: center;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-.metric-card .value {
-    font-size: 1.8rem;
-    font-weight: 600;
-    color: #0f1923;
-    line-height: 1.2;
-}
-.metric-card .label {
-    font-size: 0.78rem;
-    color: #64748b;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-top: 0.2rem;
-}
-
-/* Score badge */
-.score-badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 20px;
-    font-weight: 600;
-    font-size: 0.85rem;
-}
-.score-5 { background: #166534; color: #dcfce7; }
-.score-4 { background: #14532d; color: #bbf7d0; }
-.score-3 { background: #854d0e; color: #fef9c3; }
-.score-2 { background: #7c2d12; color: #ffedd5; }
-.score-1 { background: #991b1b; color: #fee2e2; }
-.score-0 { background: #374151; color: #f3f4f6; }
-
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    background: #f8fafc;
-    border-radius: 8px;
-    padding: 4px;
-}
-.stTabs [data-baseweb="tab"] {
-    border-radius: 6px;
-    font-weight: 500;
-    font-size: 0.9rem;
-}
-.stTabs [aria-selected="true"] {
-    background: white !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-/* Botão de análise */
+.main-header h1 { font-family:'DM Serif Display',serif; font-size:2.2rem; margin:0; color:#f0c040; }
+.main-header p  { margin:.3rem 0 0; color:#94a3b8; font-size:.95rem; }
+.stTabs [data-baseweb="tab-list"] { gap:4px; background:#f8fafc; border-radius:8px; padding:4px; }
+.stTabs [data-baseweb="tab"] { border-radius:6px; font-weight:500; }
+.stTabs [aria-selected="true"] { background:white !important; box-shadow:0 1px 3px rgba(0,0,0,.1); }
 .stButton > button {
-    background: #f0c040 !important;
-    color: #0f1923 !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 0.6rem 2rem !important;
-    font-size: 1rem !important;
-    width: 100%;
-    transition: opacity 0.2s;
+    background:#f0c040 !important; color:#0f1923 !important;
+    font-weight:600 !important; border:none !important;
+    border-radius:8px !important; width:100%;
 }
-.stButton > button:hover {
-    opacity: 0.88;
-}
-
-/* Dataframe */
-[data-testid="stDataFrame"] {
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-/* Aviso de score */
 .score-legend {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 0.8rem 1rem;
-    font-size: 0.82rem;
-    color: #475569;
-    margin-top: 1rem;
+    background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;
+    padding:.8rem 1rem; font-size:.82rem; color:#475569; margin-top:1rem;
 }
-
-/* Status indicator */
-.status-ok { color: #16a34a; font-weight: 500; }
-.status-warn { color: #d97706; font-weight: 500; }
 </style>
 """, unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  API brapi.dev
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ════════════════════════════════════════════════════════════════════════════
-#  EXTRATORES (adaptados do código original)
-# ════════════════════════════════════════════════════════════════════════════
+BRAPI = "https://brapi.dev/api"
 
-HEADERS = {
-    'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                   'AppleWebKit/537.36 (KHTML, like Gecko) '
-                   'Chrome/120.0.0.0 Safari/537.36')
-}
-
-
-def _clean_float(value_str: str) -> float:
-    """Limpa e converte string numérica BR para float."""
-    if not value_str or value_str.strip() == '-':
-        return 0.0
-    cleaned = value_str.strip().replace('R$', '').replace('%', '').strip()
-    if ',' in cleaned:
-        cleaned = cleaned.replace('.', '').replace(',', '.')
+def _safe(val, default=0.0):
     try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+        f = float(val)
+        return default if (f != f) else f
+    except (TypeError, ValueError):
+        return default
 
-
-def _extract_by_datakey(soup, data_key: str) -> float:
-    """Extrai indicador de ação via atributo data-key."""
-    btn = soup.find('button', {'data-key': data_key})
-    if btn:
-        container = btn.find_parent('div')
-        block = container.find_parent('div') if container else None
-        if block:
-            tag = block.find('strong', class_='value')
-            if tag:
-                return _clean_float(tag.text)
-    raise AttributeError(f"data-key '{data_key}' não encontrado")
-
-
-def extrair_fii(ticker: str) -> dict | None:
-    """Extrai dados de um FII do StatusInvest."""
-    url = f"https://statusinvest.com.br/fundos-imobiliarios/{ticker.lower()}"
+def _get(url):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=12)
+        r = requests.get(url, timeout=15)
         r.raise_for_status()
-        soup = BeautifulSoup(r.content, 'html.parser')
+        return r.json()
+    except Exception as e:
+        return {"_erro": str(e)}
 
-        val_tag = soup.find('div', title='Valor atual do ativo')
-        if not val_tag:
-            raise AttributeError("Valor atual não encontrado")
-        valor_atual = _clean_float(val_tag.find('strong', class_='value').text)
+def extrair_acao(ticker):
+    url  = f"{BRAPI}/quote/{ticker}?modules=defaultKeyStatistics,financialData"
+    data = _get(url)
+    if "_erro" in data:
+        return {"Ticker": ticker.upper(), "_erro": data["_erro"]}
+    try:
+        res   = data["results"][0]
+        stats = res.get("defaultKeyStatistics") or {}
+        fdata = res.get("financialData") or {}
 
-        dy_tag = soup.find('div', title='Dividend Yield com base nos últimos 12 meses')
-        dy_str = dy_tag.find('strong', class_='value').text if dy_tag else '-'
-        dy = _clean_float(dy_str) / 100 if dy_str.strip() != '-' else 0.0
+        valor = _safe(res.get("regularMarketPrice"))
+        dy_f  = _safe(res.get("dividendYield") or stats.get("dividendYield"))
+        dy    = dy_f * 100 if dy_f < 1 else dy_f
 
-        appr_tag = soup.find('div', title=re.compile(r'Valorização no preço do ativo com base nos últimos 12 meses'))
-        appr_str = appr_tag.find('strong', class_='value').text if appr_tag else '-'
-        appr_12m = _clean_float(appr_str) / 100 if appr_str.strip() != '-' else 0.0
+        y_low = _safe(res.get("fiftyTwoWeekLow"))
+        var12 = round(((valor - y_low) / y_low) * 50, 2) if y_low > 0 and valor > 0 else 0.0
+        v12   = valor / (1 + var12/100) if var12 != -100 else None
 
-        mo_tag = soup.find('div', title='Valorização no preço do ativo com base no mês atual')
-        mo_str = mo_tag.find('b', class_='v-align-middle').text if mo_tag else '0'
-        appr_mo = _clean_float(mo_str)
-
-        pvp_tag = soup.find('h3', class_='title m-0', string='P/VP')
-        pvp = 0.0
-        if pvp_tag:
-            pvp_val = pvp_tag.find_next_sibling('strong', class_='value')
-            if pvp_val:
-                pvp = _clean_float(pvp_val.text)
-
-        v12 = valor_atual / (1 + appr_12m) if (1 + appr_12m) != 0 else None
+        pvp  = _safe(stats.get("priceToBook"))
+        peg  = _safe(stats.get("pegRatio"))
+        debt = _safe(fdata.get("totalDebt"))
+        cash = _safe(fdata.get("totalCash"))
+        ebit = _safe(fdata.get("ebitda"))
+        dle  = round((debt - cash) / ebit, 2) if ebit != 0 else 0.0
 
         return {
-            'Ticker': ticker.upper(),
-            'Valor Atual': valor_atual,
-            'Valor 12m Atrás': v12,
-            'DY (%)': dy * 100,
-            'Valorização 12m (%)': appr_12m * 100,
-            'Valorização Mês (%)': appr_mo,
-            'P/VP': pvp,
+            "Ticker": ticker.upper(),
+            "Valor Atual": valor,
+            "Valor 12m Atrás": v12,
+            "DY (%)": round(dy, 2),
+            "Valorização 12m (%)": var12,
+            "Valorização Mês (%)": round(_safe(res.get("regularMarketChangePercent")), 2),
+            "P/VP": round(pvp, 2),
+            "PEG Ratio": round(peg, 2),
+            "DL/EBITDA": dle,
         }
-    except Exception as e:
-        return {'Ticker': ticker.upper(), '_erro': str(e)}
+    except (KeyError, IndexError) as e:
+        return {"Ticker": ticker.upper(), "_erro": str(e)}
 
-
-def extrair_acao(ticker: str) -> dict | None:
-    """Extrai dados de uma ação do StatusInvest."""
-    url = f"https://statusinvest.com.br/acoes/{ticker.lower()}"
+def extrair_fii(ticker):
+    url  = f"{BRAPI}/quote/{ticker}?modules=defaultKeyStatistics"
+    data = _get(url)
+    if "_erro" in data:
+        return {"Ticker": ticker.upper(), "_erro": data["_erro"]}
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.content, 'html.parser')
+        res   = data["results"][0]
+        stats = res.get("defaultKeyStatistics") or {}
 
-        val_tag = soup.find('div', title='Valor atual do ativo')
-        if not val_tag:
-            raise AttributeError("Valor atual não encontrado")
-        valor_atual = _clean_float(val_tag.find('strong', class_='value').text)
+        valor = _safe(res.get("regularMarketPrice"))
+        dy_f  = _safe(res.get("dividendYield") or stats.get("dividendYield"))
+        dy    = dy_f * 100 if dy_f < 1 else dy_f
 
-        dy_h3 = soup.find('h3', string='Dividend Yield')
-        dy = 0.0
-        if dy_h3:
-            dy_val = dy_h3.find_parent('div')
-            dy_tag2 = dy_val.find_next_sibling('strong', class_='value') if dy_val else None
-            if not dy_tag2 and dy_val:
-                dy_tag2 = dy_val.find('strong', class_='value')
-            dy = _clean_float(dy_tag2.text) / 100 if dy_tag2 else 0.0
-
-        appr_tag = soup.find('div', title=re.compile(r'Valorização no preço do ativo'))
-        appr_12m_raw = _clean_float(appr_tag.find('strong', class_='value').text) / 100 if appr_tag else 0.0
-
-        mo_tag = soup.find('div', title='Valorização no preço do ativo com base no mês atual')
-        appr_mo = 0.0
-        if mo_tag:
-            b = mo_tag.find('b', class_='v-align-middle')
-            appr_mo = _clean_float(b.text) if b else 0.0
-
-        pvp  = _extract_by_datakey(soup, 'p_vp')
-        peg  = _extract_by_datakey(soup, 'peg_Ratio')
-        dl_e = _extract_by_datakey(soup, 'dividaliquida_ebitda')
-
-        v12 = valor_atual / (1 + appr_12m_raw) if (1 + appr_12m_raw) != 0 else None
+        y_low = _safe(res.get("fiftyTwoWeekLow"))
+        var12 = round(((valor - y_low) / y_low) * 50, 2) if y_low > 0 and valor > 0 else 0.0
+        v12   = valor / (1 + var12/100) if var12 != -100 else None
+        pvp   = _safe(stats.get("priceToBook"))
 
         return {
-            'Ticker': ticker.upper(),
-            'Valor Atual': valor_atual,
-            'Valor 12m Atrás': v12,
-            'DY (%)': dy * 100,
-            'Valorização 12m (%)': appr_12m_raw * 100,
-            'Valorização Mês (%)': appr_mo,
-            'P/VP': pvp,
-            'PEG Ratio': peg,
-            'DL/EBITDA': dl_e,
+            "Ticker": ticker.upper(),
+            "Valor Atual": valor,
+            "Valor 12m Atrás": v12,
+            "DY (%)": round(dy, 2),
+            "Valorização 12m (%)": var12,
+            "Valorização Mês (%)": round(_safe(res.get("regularMarketChangePercent")), 2),
+            "P/VP": round(pvp, 2),
         }
-    except Exception as e:
-        return {'Ticker': ticker.upper(), '_erro': str(e)}
+    except (KeyError, IndexError) as e:
+        return {"Ticker": ticker.upper(), "_erro": str(e)}
 
-
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 #  SCORES
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 
-def calcular_scores_fiis(df: pd.DataFrame) -> pd.DataFrame:
+def scores_fiis(df):
     df = df.copy()
-    df['ScoreEvolucao']    = (df['Valor Atual'] < df['Valor 12m Atrás']).astype(int)
-    df['ScorePreco']       = ((df['P/VP'] >= 0.5) & (df['P/VP'] <= 0.95)).astype(int)
-    df['ScoreVariacao12m'] = ((df['Valorização 12m (%)'] >= 1) & (df['Valorização 12m (%)'] <= 10)).astype(int)
-    df['SomaScores']       = df['ScoreEvolucao'] + df['ScorePreco'] + df['ScoreVariacao12m']
+    df["ScoreEvolucao"]    = (df["Valor Atual"] < df["Valor 12m Atrás"]).astype(int)
+    df["ScorePreco"]       = ((df["P/VP"] >= 0.5) & (df["P/VP"] <= 0.95)).astype(int)
+    df["ScoreVariacao12m"] = ((df["Valorização 12m (%)"] >= 1) & (df["Valorização 12m (%)"] <= 10)).astype(int)
+    df["SomaScores"]       = df["ScoreEvolucao"] + df["ScorePreco"] + df["ScoreVariacao12m"]
     return df
 
-
-def calcular_scores_acoes(df: pd.DataFrame) -> pd.DataFrame:
+def scores_acoes(df):
     df = df.copy()
-    df['ScoreEvolucao']    = np.where(df['Valor Atual'] < df['Valor 12m Atrás'], 1, 0)
-    df['ScorePreco']       = np.where((df['P/VP'] >= 0.5) & (df['P/VP'] <= 0.95), 1, 0)
-    df['ScoreVariacao12m'] = np.where((df['Valorização 12m (%)'] >= 1) & (df['Valorização 12m (%)'] <= 10), 1, 0)
-    df['ScorePeg']         = np.where((df['PEG Ratio'] >= 0.4) & (df['PEG Ratio'] <= 1.0), 1, 0)
-    df['ScoreAlavancagem'] = np.where((df['DL/EBITDA'] >= 1.0) & (df['DL/EBITDA'] <= 3.0), 1, 0)
-    df['SomaScore']        = df[['ScoreEvolucao','ScorePreco','ScoreVariacao12m','ScorePeg','ScoreAlavancagem']].sum(axis=1)
+    df["ScoreEvolucao"]    = np.where(df["Valor Atual"] < df["Valor 12m Atrás"], 1, 0)
+    df["ScorePreco"]       = np.where((df["P/VP"] >= 0.5) & (df["P/VP"] <= 0.95), 1, 0)
+    df["ScoreVariacao12m"] = np.where((df["Valorização 12m (%)"] >= 1) & (df["Valorização 12m (%)"] <= 10), 1, 0)
+    df["ScorePeg"]         = np.where((df["PEG Ratio"] >= 0.4) & (df["PEG Ratio"] <= 1.0), 1, 0)
+    df["ScoreAlavancagem"] = np.where((df["DL/EBITDA"] >= 1.0) & (df["DL/EBITDA"] <= 3.0), 1, 0)
+    df["SomaScore"]        = df[["ScoreEvolucao","ScorePreco","ScoreVariacao12m","ScorePeg","ScoreAlavancagem"]].sum(axis=1)
     return df
 
-
-# ════════════════════════════════════════════════════════════════════════════
-#  MAGIC NUMBER
-# ════════════════════════════════════════════════════════════════════════════
-
-def calcular_magic_number(df: pd.DataFrame) -> pd.DataFrame:
+def magic_number(df):
     df = df.copy()
-    df['Valor Atual']  = pd.to_numeric(df['Valor Atual'], errors='coerce')
-    df['DY (%)']       = pd.to_numeric(df['DY (%)'], errors='coerce')
-    df['Qtd Atual']    = pd.to_numeric(df.get('Qtd Atual', 0), errors='coerce').fillna(0)
-
-    df['Rend. Mensal'] = (df['Valor Atual'] * (df['DY (%)'] / 100)) / 12
-    mask = (df['Rend. Mensal'].notna()) & (df['Rend. Mensal'] > 0)
-    df['Qtd Mágica'] = np.nan
-    df.loc[mask, 'Qtd Mágica'] = (
-        df.loc[mask, 'Valor Atual'] / df.loc[mask, 'Rend. Mensal']
-    ).apply(lambda x: math.ceil(x) if not pd.isna(x) else np.nan)
-
-    mask2 = (df['Qtd Mágica'].notna()) & (df['Qtd Mágica'] > 0)
-    df['Nível Atingimento'] = np.nan
-    df.loc[mask2, 'Nível Atingimento'] = (
-        df.loc[mask2, 'Qtd Atual'] / df.loc[mask2, 'Qtd Mágica']
-    ).apply(lambda x: math.floor(x) if not pd.isna(x) else np.nan).astype('Int64')
-
+    df["Valor Atual"] = pd.to_numeric(df["Valor Atual"], errors="coerce")
+    df["DY (%)"]      = pd.to_numeric(df["DY (%)"],      errors="coerce")
+    df["Qtd Atual"]   = pd.to_numeric(df.get("Qtd Atual", pd.Series([0]*len(df))), errors="coerce").fillna(0)
+    df["Rend. Mensal"] = (df["Valor Atual"] * (df["DY (%)"] / 100)) / 12
+    mask  = df["Rend. Mensal"].notna() & (df["Rend. Mensal"] > 0)
+    df["Qtd Mágica"] = np.nan
+    df.loc[mask, "Qtd Mágica"] = (df.loc[mask,"Valor Atual"] / df.loc[mask,"Rend. Mensal"]).apply(
+        lambda x: math.ceil(x) if not pd.isna(x) else np.nan)
+    mask2 = df["Qtd Mágica"].notna() & (df["Qtd Mágica"] > 0)
+    df["Nível Ating."] = pd.NA
+    df.loc[mask2, "Nível Ating."] = (df.loc[mask2,"Qtd Atual"] / df.loc[mask2,"Qtd Mágica"]).apply(
+        lambda x: math.floor(x) if not pd.isna(x) else pd.NA).astype("Int64")
     return df
 
+def mesclar(df, df_pos):
+    try:
+        p = df_pos[["Código de Negociação","Quantidade"]].copy()
+        p.rename(columns={"Código de Negociação":"Ticker","Quantidade":"Qtd Atual"}, inplace=True)
+        m = pd.merge(df, p, on="Ticker", how="left")
+        m["Qtd Atual"] = m["Qtd Atual"].fillna(0)
+        return m
+    except Exception as e:
+        st.warning(f"Posição não mesclada: {e}")
+        df["Qtd Atual"] = 0
+        return df
 
-# ════════════════════════════════════════════════════════════════════════════
-#  HELPERS DE UI
-# ════════════════════════════════════════════════════════════════════════════
-
-def score_color(val, max_score):
-    """Retorna classe CSS de cor para score."""
-    pct = val / max_score if max_score > 0 else 0
-    if pct >= 0.8: return 'score-5'
-    if pct >= 0.6: return 'score-4'
-    if pct >= 0.4: return 'score-3'
-    if pct >= 0.2: return 'score-2'
-    if pct >  0.0: return 'score-1'
-    return 'score-0'
-
-
-def render_score_col(df, col, max_score):
-    """Cria coluna de badges HTML para scores."""
-    def badge(val):
-        try:
-            v = int(val)
-            cls = score_color(v, max_score)
-            return f'<span class="score-badge {cls}">{v}/{max_score}</span>'
-        except:
-            return ''
-    return df[col].apply(badge)
-
-
-def fmt_pct(v):
-    try: return f"{float(v):+.2f}%"
-    except: return str(v)
-
-def fmt_brl(v):
-    try: return f"R$ {float(v):,.2f}".replace(',','X').replace('.',',').replace('X','.')
-    except: return str(v)
-
-def fmt_float2(v):
-    try: return f"{float(v):.2f}"
-    except: return str(v)
-
-
-def df_para_excel(df: pd.DataFrame) -> bytes:
-    """Serializa DataFrame para bytes de XLSX."""
+def para_excel(df):
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as w:
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False)
     return buf.getvalue()
 
+def parse_t(txt):
+    return [l.strip().upper() for l in txt.replace(",","\n").splitlines() if l.strip()]
 
-def parse_tickers(texto: str) -> list[str]:
-    """Extrai lista de tickers de um texto (um por linha ou separados por vírgula)."""
-    tickers = []
-    for linha in texto.replace(',', '\n').splitlines():
-        t = linha.strip().upper()
-        if t:
-            tickers.append(t)
-    return tickers
-
-
-def mesclar_posicao(df_dados: pd.DataFrame, df_posicao: pd.DataFrame, coluna_sheet: str) -> pd.DataFrame:
-    """Faz merge de quantidade da posição no DataFrame de dados."""
-    try:
-        df_pos = df_posicao[['Código de Negociação', 'Quantidade']].copy()
-        df_pos.rename(columns={'Código de Negociação': 'Ticker', 'Quantidade': 'Qtd Atual'}, inplace=True)
-        df_merged = pd.merge(df_dados, df_pos, on='Ticker', how='left')
-        df_merged['Qtd Atual'] = df_merged['Qtd Atual'].fillna(0)
-        return df_merged
-    except Exception as e:
-        st.warning(f"Não foi possível mesclar posição ({coluna_sheet}): {e}")
-        df_dados['Qtd Atual'] = 0
-        return df_dados
-
-
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 #  SIDEBAR
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("## 📊 AnáliseStock")
     st.markdown("---")
-
-    st.markdown("### 🎯 Tickers de Ações")
-    tickers_input = st.text_area(
-        "Um por linha (ou separados por vírgula)",
-        value="AURE3\nBBAS3\nBBDC4\nEGIE3\nITUB4\nVALE3",
-        height=160,
-        key="tickers_input",
-        label_visibility="collapsed",
-    )
-
+    st.markdown("### 🎯 Ações")
+    t_in = st.text_area("t", value="AURE3\nBBAS3\nBBDC4\nEGIE3\nITUB4\nVALE3",
+                        height=160, key="t_in", label_visibility="collapsed")
     st.markdown("### 🏢 FIIs")
-    fiis_input = st.text_area(
-        "Um por linha",
-        value="CPTS11\nGGRC11\nKNRI11\nMXRF11\nXPLG11\nXPML11",
-        height=140,
-        key="fiis_input",
-        label_visibility="collapsed",
-    )
-
-    st.markdown("### 📂 Posição da Carteira")
-    st.caption("Arquivo .xlsx exportado da B3 (opcional)")
-    posicao_file = st.file_uploader(
-        "posicao.xlsx",
-        type=["xlsx"],
-        label_visibility="collapsed",
-    )
-
+    f_in = st.text_area("f", value="CPTS11\nGGRC11\nKNRI11\nMXRF11\nXPLG11\nXPML11",
+                        height=140, key="f_in", label_visibility="collapsed")
+    st.markdown("### 📂 Posição (opcional)")
+    st.caption("posicao.xlsx exportado da B3")
+    pos_file = st.file_uploader("pos", type=["xlsx"], label_visibility="collapsed")
     st.markdown("---")
     rodar = st.button("🚀 Rodar Análise", use_container_width=True)
+    st.caption("Fonte: brapi.dev · v2")
 
-    st.markdown("---")
-    st.caption("Dados: statusinvest.com.br")
-    st.caption("v4 · Streamlit Cloud")
-
-
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 #  HEADER
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <div class="main-header">
-    <h1>📈 AnáliseStock</h1>
-    <p>Análise quantitativa de Ações e FIIs da B3 · Scores, Magic Number e posição da carteira</p>
+  <h1>📈 AnáliseStock</h1>
+  <p>Análise quantitativa de Ações e FIIs da B3 · Scores, Magic Number e posição da carteira</p>
 </div>
 """, unsafe_allow_html=True)
 
+# Session state
+for k, v in [("df_a",None),("df_f",None),("err_a",[]),("err_f",[]),("rodou",False)]:
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-# ════════════════════════════════════════════════════════════════════════════
-#  ESTADO DA SESSÃO
-# ════════════════════════════════════════════════════════════════════════════
-
-if 'df_acoes' not in st.session_state:
-    st.session_state.df_acoes = None
-if 'df_fiis' not in st.session_state:
-    st.session_state.df_fiis = None
-if 'erros_acoes' not in st.session_state:
-    st.session_state.erros_acoes = []
-if 'erros_fiis' not in st.session_state:
-    st.session_state.erros_fiis = []
-
-
-# ════════════════════════════════════════════════════════════════════════════
-#  EXECUÇÃO DA ANÁLISE
-# ════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  EXECUÇÃO
+# ─────────────────────────────────────────────────────────────────────────────
 
 if rodar:
-    tickers = parse_tickers(tickers_input)
-    fiis    = parse_tickers(fiis_input)
-
+    tickers = parse_t(t_in)
+    fiis    = parse_t(f_in)
     if not tickers and not fiis:
-        st.error("⚠️ Informe ao menos um ticker ou FII antes de rodar a análise.")
+        st.error("Informe ao menos um ticker.")
         st.stop()
 
-    # Carrega posição se enviada
-    df_pos_acoes = None
-    df_pos_fiis  = None
-    if posicao_file:
+    pos_a = pos_f = None
+    if pos_file:
         try:
-            df_pos_acoes = pd.read_excel(posicao_file, sheet_name='Acoes')
-            posicao_file.seek(0)
-            df_pos_fiis  = pd.read_excel(posicao_file, sheet_name='Fundo de Investimento')
+            pos_a = pd.read_excel(pos_file, sheet_name="Acoes")
+            pos_file.seek(0)
+            pos_f = pd.read_excel(pos_file, sheet_name="Fundo de Investimento")
         except Exception as e:
-            st.warning(f"Não foi possível ler posicao.xlsx: {e}")
+            st.warning(f"posicao.xlsx: {e}")
 
-    # ── Extração Ações ────────────────────────────────────────────────────
+    # Ações
     if tickers:
-        st.markdown("### ⚙️ Extraindo dados das Ações...")
-        prog_a = st.progress(0, text="Iniciando...")
-        dados_acoes = []
-        erros_a = []
+        p = st.progress(0, text="Buscando ações…")
+        dados, erros = [], []
         for i, t in enumerate(tickers):
-            prog_a.progress((i + 1) / len(tickers), text=f"Buscando {t}…")
-            resultado = extrair_acao(t)
-            if resultado:
-                if '_erro' in resultado:
-                    erros_a.append((t, resultado['_erro']))
-                else:
-                    dados_acoes.append(resultado)
-            time.sleep(0.4)  # cortesia ao servidor
-        prog_a.empty()
+            p.progress((i+1)/len(tickers), text=f"🔍 {t}")
+            r = extrair_acao(t)
+            (erros if "_erro" in r else dados).append(r if "_erro" in r else r)
+            time.sleep(0.2)
+        p.empty()
+        # separa erros corretamente
+        dados_ok  = [r for r in dados if "_erro" not in r]
+        erros_ok  = [(r["Ticker"], r["_erro"]) for r in dados if "_erro" in r]
+        erros_ok += erros
 
-        if dados_acoes:
-            df_a = pd.DataFrame(dados_acoes)
-            df_a = calcular_scores_acoes(df_a)
-            if df_pos_acoes is not None:
-                df_a = mesclar_posicao(df_a, df_pos_acoes, 'Acoes')
-            else:
-                df_a['Qtd Atual'] = 0
-            df_a = calcular_magic_number(df_a)
-            st.session_state.df_acoes   = df_a
-            st.session_state.erros_acoes = erros_a
+        if dados_ok:
+            df_a = pd.DataFrame(dados_ok)
+            df_a = scores_acoes(df_a)
+            df_a = mesclar(df_a, pos_a) if pos_a is not None else df_a.assign(**{"Qtd Atual":0})
+            df_a = magic_number(df_a)
+            st.session_state.df_a  = df_a
+        else:
+            st.session_state.df_a  = None
+        st.session_state.err_a = erros_ok
 
-    # ── Extração FIIs ────────────────────────────────────────────────────
+    # FIIs
     if fiis:
-        st.markdown("### ⚙️ Extraindo dados dos FIIs...")
-        prog_f = st.progress(0, text="Iniciando...")
-        dados_fiis = []
-        erros_f = []
+        p = st.progress(0, text="Buscando FIIs…")
+        dados, erros = [], []
         for i, t in enumerate(fiis):
-            prog_f.progress((i + 1) / len(fiis), text=f"Buscando {t}…")
-            resultado = extrair_fii(t)
-            if resultado:
-                if '_erro' in resultado:
-                    erros_f.append((t, resultado['_erro']))
-                else:
-                    dados_fiis.append(resultado)
-            time.sleep(0.4)
-        prog_f.empty()
+            p.progress((i+1)/len(fiis), text=f"🔍 {t}")
+            r = extrair_fii(t)
+            (erros if "_erro" in r else dados).append(r)
+            time.sleep(0.2)
+        p.empty()
+        dados_ok  = [r for r in dados if "_erro" not in r]
+        erros_ok  = [(r["Ticker"], r["_erro"]) for r in dados if "_erro" in r]
+        erros_ok += erros
 
-        if dados_fiis:
-            df_f = pd.DataFrame(dados_fiis)
-            df_f = calcular_scores_fiis(df_f)
-            if df_pos_fiis is not None:
-                df_f = mesclar_posicao(df_f, df_pos_fiis, 'Fundo de Investimento')
-            else:
-                df_f['Qtd Atual'] = 0
-            df_f = calcular_magic_number(df_f)
-            st.session_state.df_fiis   = df_f
-            st.session_state.erros_fiis = erros_f
+        if dados_ok:
+            df_f = pd.DataFrame(dados_ok)
+            df_f = scores_fiis(df_f)
+            df_f = mesclar(df_f, pos_f) if pos_f is not None else df_f.assign(**{"Qtd Atual":0})
+            df_f = magic_number(df_f)
+            st.session_state.df_f  = df_f
+        else:
+            st.session_state.df_f  = None
+        st.session_state.err_f = erros_ok
 
-    st.success("✅ Análise concluída! Veja os resultados abaixo.")
+    st.session_state.rodou = True
     st.rerun()
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  RESULTADOS
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ════════════════════════════════════════════════════════════════════════════
-#  EXIBIÇÃO DOS RESULTADOS
-# ════════════════════════════════════════════════════════════════════════════
+da = st.session_state.df_a
+df = st.session_state.df_f
 
-df_a = st.session_state.df_acoes
-df_f = st.session_state.df_fiis
-
-if df_a is None and df_f is None:
-    # Estado inicial — instrução ao usuário
-    st.info(
-        "👈 **Como usar:** Insira os tickers na barra lateral, faça upload da sua "
-        "posição (opcional) e clique em **Rodar Análise**."
-    )
-
-    with st.expander("ℹ️ Sobre os scores e o Magic Number"):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("""
-**Scores de Ações (0–5)**
-| Score | Critério |
-|-------|----------|
-| ScoreEvolucao | Preço atual < preço há 12m |
-| ScorePreco | 0,50 ≤ P/VP ≤ 0,95 |
-| ScoreVariacao12m | 1% ≤ Valorização 12m ≤ 10% |
-| ScorePeg | 0,40 ≤ PEG Ratio ≤ 1,00 |
-| ScoreAlavancagem | 1,0 ≤ DL/EBITDA ≤ 3,0 |
-""")
-        with col2:
-            st.markdown("""
-**Scores de FIIs (0–3)**
-| Score | Critério |
-|-------|----------|
-| ScoreEvolucao | Preço atual < preço há 12m |
-| ScorePreco | 0,50 ≤ P/VP ≤ 0,95 |
-| ScoreVariacao12m | 1% ≤ Valorização 12m ≤ 10% |
-
-**Magic Number**
-> Quantidade de cotas necessária para que os dividendos mensais cubram o custo de 1 cota.
-""")
+if not st.session_state.rodou:
+    st.info("👈 Insira os tickers na barra lateral e clique em **Rodar Análise**.")
+    with st.expander("ℹ️ Scores e Magic Number"):
+        c1,c2 = st.columns(2)
+        c1.markdown("""**Ações (0–5)**\n| Score | Critério |\n|---|---|\n|ScoreEvolucao|Preço < 12m atrás|\n|ScorePreco|0,50≤P/VP≤0,95|\n|ScoreVariacao12m|1%≤Var12m≤10%|\n|ScorePeg|0,40≤PEG≤1,00|\n|ScoreAlavancagem|1,0≤DL/EBITDA≤3,0|""")
+        c2.markdown("""**FIIs (0–3)**\n| Score | Critério |\n|---|---|\n|ScoreEvolucao|Preço < 12m atrás|\n|ScorePreco|0,50≤P/VP≤0,95|\n|ScoreVariacao12m|1%≤Var12m≤10%|\n\n**Magic Number**: Qtd para que dividendos mensais paguem 1 cota.""")
     st.stop()
 
+if da is None and df is None:
+    all_e = st.session_state.err_a + st.session_state.err_f
+    st.error("❌ Nenhum dado retornado.")
+    for t,m in all_e:
+        st.caption(f"**{t}** — {m}")
+    st.stop()
 
-# ── Resumo geral ─────────────────────────────────────────────────────────
-total_acoes = len(df_a) if df_a is not None else 0
-total_fiis  = len(df_f) if df_f is not None else 0
-erros_total = len(st.session_state.erros_acoes) + len(st.session_state.erros_fiis)
+# Métricas
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("Ações",  len(da) if da is not None else 0)
+c2.metric("Melhor (Ações)",  f"{int(da['SomaScore'].max())}/5"   if da is not None and len(da)>0 else "—")
+c3.metric("FIIs",   len(df) if df is not None else 0)
+c4.metric("Melhor (FIIs)",   f"{int(df['SomaScores'].max())}/3"  if df is not None and len(df)>0 else "—")
 
-col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-with col_m1:
-    st.metric("Ações analisadas", total_acoes)
-with col_m2:
-    best_a = int(df_a['SomaScore'].max()) if df_a is not None and len(df_a) > 0 else 0
-    st.metric("Melhor score (Ações)", f"{best_a}/5")
-with col_m3:
-    st.metric("FIIs analisados", total_fiis)
-with col_m4:
-    best_f = int(df_f['SomaScores'].max()) if df_f is not None and len(df_f) > 0 else 0
-    st.metric("Melhor score (FIIs)", f"{best_f}/3")
+all_e = st.session_state.err_a + st.session_state.err_f
+if all_e:
+    with st.expander(f"⚠️ {len(all_e)} ticker(s) com falha"):
+        for t,m in all_e:
+            st.caption(f"**{t}** — {m}")
 
+tab_a, tab_f, tab_r = st.tabs(["📋 Ações","🏢 FIIs","🏆 Ranking"])
 
-# ── Erros ────────────────────────────────────────────────────────────────
-all_erros = st.session_state.erros_acoes + st.session_state.erros_fiis
-if all_erros:
-    with st.expander(f"⚠️ {len(all_erros)} ticker(s) com falha na extração"):
-        for t, msg in all_erros:
-            st.caption(f"**{t}** — {msg}")
-
-
-# ── Abas principais ──────────────────────────────────────────────────────
-tab_a, tab_f, tab_ranking = st.tabs(["📋 Ações", "🏢 FIIs", "🏆 Ranking Geral"])
-
-
-# ───────────────────────────── ABA AÇÕES ─────────────────────────────────
+# ── Ações ─────────────────────────────────────────────────────────────────
 with tab_a:
-    if df_a is None or len(df_a) == 0:
-        st.info("Nenhum dado de ação disponível.")
+    if da is None or len(da)==0:
+        st.info("Sem dados de ações.")
     else:
-        st.markdown(f"**{len(df_a)} ações analisadas**")
+        c1,c2,c3 = st.columns([2,1,1])
+        bq = c1.text_input("🔍 Filtrar", key="bqa", placeholder="ex: VALE3")
+        ms = c2.selectbox("Score ≥", [0,1,2,3,4,5], key="msa")
+        od = c3.selectbox("Ordenar", ["SomaScore ↓","DY (%) ↓","P/VP ↑","Ticker ↑"], key="oda")
+        dv = da.copy()
+        if bq: dv = dv[dv["Ticker"].str.contains(bq.upper())]
+        dv = dv[dv["SomaScore"] >= ms]
+        oc,asc = {"SomaScore ↓":("SomaScore",False),"DY (%) ↓":("DY (%)",False),
+                  "P/VP ↑":("P/VP",True),"Ticker ↑":("Ticker",True)}[od]
+        dv = dv.sort_values(oc, ascending=asc)
+        cs = [c for c in ["Ticker","Valor Atual","DY (%)","Valorização 12m (%)","P/VP",
+              "PEG Ratio","DL/EBITDA","Qtd Atual","Rend. Mensal","Qtd Mágica","Nível Ating.","SomaScore"] if c in dv.columns]
+        fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
+              "P/VP":"{:.2f}","PEG Ratio":"{:.2f}","DL/EBITDA":"{:.2f}",
+              "Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
+        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5),
+                     use_container_width=True, height=420)
+        st.markdown('<div class="score-legend">🟢 <b>5</b> excelente &nbsp;|&nbsp; 🟡 <b>3</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo dos critérios &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
+        st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "acoes.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # Filtros
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            busca_a = st.text_input("🔍 Filtrar por ticker", key="busca_a", placeholder="ex: VALE3")
-        with c2:
-            min_score_a = st.selectbox("Score mínimo", [0,1,2,3,4,5], index=0, key="minscore_a")
-        with c3:
-            ordenar_a = st.selectbox("Ordenar por", ["SomaScore ↓", "DY (%) ↓", "Valorização 12m (%) ↓", "Ticker ↑"], key="ord_a")
-
-        df_a_view = df_a.copy()
-        if busca_a:
-            df_a_view = df_a_view[df_a_view['Ticker'].str.contains(busca_a.upper())]
-        df_a_view = df_a_view[df_a_view['SomaScore'] >= min_score_a]
-
-        ordem_map = {
-            "SomaScore ↓": ('SomaScore', False),
-            "DY (%) ↓": ('DY (%)', False),
-            "Valorização 12m (%) ↓": ('Valorização 12m (%)', False),
-            "Ticker ↑": ('Ticker', True),
-        }
-        col_ord, asc = ordem_map[ordenar_a]
-        df_a_view = df_a_view.sort_values(col_ord, ascending=asc)
-
-        # Colunas de exibição
-        cols_show = ['Ticker','Valor Atual','DY (%)','Valorização 12m (%)','P/VP',
-                     'PEG Ratio','DL/EBITDA','Qtd Atual','Rend. Mensal',
-                     'Qtd Mágica','Nível Atingimento','SomaScore']
-        cols_show = [c for c in cols_show if c in df_a_view.columns]
-
-        st.dataframe(
-            df_a_view[cols_show].style.format({
-                'Valor Atual': 'R$ {:.2f}',
-                'DY (%)': '{:.2f}%',
-                'Valorização 12m (%)': '{:+.2f}%',
-                'P/VP': '{:.2f}',
-                'PEG Ratio': '{:.2f}',
-                'DL/EBITDA': '{:.2f}',
-                'Rend. Mensal': 'R$ {:.4f}',
-                'Qtd Mágica': '{:.0f}',
-            }).background_gradient(subset=['SomaScore'], cmap='RdYlGn', vmin=0, vmax=5),
-            use_container_width=True,
-            height=420,
-        )
-
-        st.markdown("""
-<div class="score-legend">
-🟢 <b>5</b> = excelente &nbsp;|&nbsp; 🟡 <b>3</b> = moderado &nbsp;|&nbsp;
-🔴 <b>0–1</b> = não atende critérios &nbsp;|&nbsp;
-<b>Nível Atingimento</b>: quantas vezes os dividendos mensais cobrem 1 cota
-</div>""", unsafe_allow_html=True)
-
-        # Download
-        st.download_button(
-            "⬇️ Baixar Ações (.xlsx)",
-            data=df_para_excel(df_a_view[cols_show]),
-            file_name="analise_acoes.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-
-# ───────────────────────────── ABA FIIs ──────────────────────────────────
+# ── FIIs ──────────────────────────────────────────────────────────────────
 with tab_f:
-    if df_f is None or len(df_f) == 0:
-        st.info("Nenhum dado de FII disponível.")
+    if df is None or len(df)==0:
+        st.info("Sem dados de FIIs.")
     else:
-        st.markdown(f"**{len(df_f)} FIIs analisados**")
+        c1,c2,c3 = st.columns([2,1,1])
+        bq = c1.text_input("🔍 Filtrar", key="bqf", placeholder="ex: KNRI11")
+        ms = c2.selectbox("Score ≥", [0,1,2,3], key="msf")
+        od = c3.selectbox("Ordenar", ["SomaScores ↓","DY (%) ↓","P/VP ↑","Ticker ↑"], key="odf")
+        dv = df.copy()
+        if bq: dv = dv[dv["Ticker"].str.contains(bq.upper())]
+        dv = dv[dv["SomaScores"] >= ms]
+        oc,asc = {"SomaScores ↓":("SomaScores",False),"DY (%) ↓":("DY (%)",False),
+                  "P/VP ↑":("P/VP",True),"Ticker ↑":("Ticker",True)}[od]
+        dv = dv.sort_values(oc, ascending=asc)
+        cs = [c for c in ["Ticker","Valor Atual","DY (%)","Valorização 12m (%)","P/VP",
+              "Qtd Atual","Rend. Mensal","Qtd Mágica","Nível Ating.","SomaScores"] if c in dv.columns]
+        fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
+              "P/VP":"{:.2f}","Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
+        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3),
+                     use_container_width=True, height=420)
+        st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "fiis.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            busca_f = st.text_input("🔍 Filtrar por ticker", key="busca_f", placeholder="ex: KNRI11")
-        with c2:
-            min_score_f = st.selectbox("Score mínimo", [0,1,2,3], index=0, key="minscore_f")
-        with c3:
-            ordenar_f = st.selectbox("Ordenar por", ["SomaScores ↓", "DY (%) ↓", "P/VP ↑", "Ticker ↑"], key="ord_f")
-
-        df_f_view = df_f.copy()
-        if busca_f:
-            df_f_view = df_f_view[df_f_view['Ticker'].str.contains(busca_f.upper())]
-        df_f_view = df_f_view[df_f_view['SomaScores'] >= min_score_f]
-
-        ordem_map_f = {
-            "SomaScores ↓": ('SomaScores', False),
-            "DY (%) ↓": ('DY (%)', False),
-            "P/VP ↑": ('P/VP', True),
-            "Ticker ↑": ('Ticker', True),
-        }
-        col_ord_f, asc_f = ordem_map_f[ordenar_f]
-        df_f_view = df_f_view.sort_values(col_ord_f, ascending=asc_f)
-
-        cols_show_f = ['Ticker','Valor Atual','DY (%)','Valorização 12m (%)','P/VP',
-                       'Qtd Atual','Rend. Mensal','Qtd Mágica','Nível Atingimento','SomaScores']
-        cols_show_f = [c for c in cols_show_f if c in df_f_view.columns]
-
-        st.dataframe(
-            df_f_view[cols_show_f].style.format({
-                'Valor Atual': 'R$ {:.2f}',
-                'DY (%)': '{:.2f}%',
-                'Valorização 12m (%)': '{:+.2f}%',
-                'P/VP': '{:.2f}',
-                'Rend. Mensal': 'R$ {:.4f}',
-                'Qtd Mágica': '{:.0f}',
-            }).background_gradient(subset=['SomaScores'], cmap='RdYlGn', vmin=0, vmax=3),
-            use_container_width=True,
-            height=420,
-        )
-
-        st.download_button(
-            "⬇️ Baixar FIIs (.xlsx)",
-            data=df_para_excel(df_f_view[cols_show_f]),
-            file_name="analise_fiis.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-
-# ───────────────────────────── ABA RANKING ───────────────────────────────
-with tab_ranking:
+# ── Ranking ───────────────────────────────────────────────────────────────
+with tab_r:
     st.markdown("### 🏆 Top ativos por score")
-
-    col_ra, col_rf = st.columns(2)
-
-    with col_ra:
-        st.markdown("#### Ações")
-        if df_a is not None and len(df_a) > 0:
-            top_a = df_a.nlargest(10, 'SomaScore')[['Ticker','SomaScore','DY (%)','P/VP']].reset_index(drop=True)
-            top_a.index += 1
-            st.dataframe(
-                top_a.style.format({'DY (%)': '{:.2f}%', 'P/VP': '{:.2f}'})
-                     .background_gradient(subset=['SomaScore'], cmap='RdYlGn', vmin=0, vmax=5),
-                use_container_width=True,
-            )
+    ca,cf = st.columns(2)
+    with ca:
+        st.markdown("#### Ações — Top 10")
+        if da is not None and len(da)>0:
+            top = da.nlargest(10,"SomaScore")[["Ticker","SomaScore","DY (%)","P/VP"]].reset_index(drop=True)
+            top.index += 1
+            st.dataframe(top.style.format({"DY (%)":"{:.2f}%","P/VP":"{:.2f}"})
+                            .background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5),
+                         use_container_width=True)
         else:
-            st.info("Sem dados de ações.")
-
-    with col_rf:
-        st.markdown("#### FIIs")
-        if df_f is not None and len(df_f) > 0:
-            top_f = df_f.nlargest(10, 'SomaScores')[['Ticker','SomaScores','DY (%)','P/VP']].reset_index(drop=True)
-            top_f.index += 1
-            st.dataframe(
-                top_f.style.format({'DY (%)': '{:.2f}%', 'P/VP': '{:.2f}'})
-                     .background_gradient(subset=['SomaScores'], cmap='RdYlGn', vmin=0, vmax=3),
-                use_container_width=True,
-            )
+            st.info("Sem dados.")
+    with cf:
+        st.markdown("#### FIIs — Top 10")
+        if df is not None and len(df)>0:
+            top = df.nlargest(10,"SomaScores")[["Ticker","SomaScores","DY (%)","P/VP"]].reset_index(drop=True)
+            top.index += 1
+            st.dataframe(top.style.format({"DY (%)":"{:.2f}%","P/VP":"{:.2f}"})
+                            .background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3),
+                         use_container_width=True)
         else:
-            st.info("Sem dados de FIIs.")
-
-    # Gráfico de distribuição de scores
-    if df_a is not None and len(df_a) > 0:
-        st.markdown("#### Distribuição de scores — Ações")
-        dist = df_a['SomaScore'].value_counts().sort_index()
-        st.bar_chart(dist, color="#f0c040")
-
-    if df_f is not None and len(df_f) > 0:
-        st.markdown("#### Distribuição de scores — FIIs")
-        dist_f = df_f['SomaScores'].value_counts().sort_index()
-        st.bar_chart(dist_f, color="#3b82f6")
+            st.info("Sem dados.")
+    if da is not None and len(da)>0:
+        st.markdown("#### Distribuição scores — Ações")
+        st.bar_chart(da["SomaScore"].value_counts().sort_index(), color="#f0c040")
+    if df is not None and len(df)>0:
+        st.markdown("#### Distribuição scores — FIIs")
+        st.bar_chart(df["SomaScores"].value_counts().sort_index(), color="#3b82f6")
