@@ -1,5 +1,5 @@
 """
-AnáliseStock — Streamlit App v4 (Yahoo Finance c/ Histórico Real)
+AnáliseStock — Web App Final (Dados Auditados via Fundamentus + Yahoo Finance)
 """
 
 import streamlit as st
@@ -9,6 +9,8 @@ import math
 import time
 import io
 import yfinance as yf
+import requests
+import re
 
 st.set_page_config(
     page_title="AnáliseStock",
@@ -46,7 +48,42 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  API Yahoo Finance (Cálculos Baseados no Histórico Real)
+#  SCRAPER: Fundamentus (Indicadores Auditados)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_fundamentos_br(ticker):
+    """Busca P/VP, DY e DL/EBITDA reais no Fundamentus"""
+    url = f"https://www.fundamentus.com.br/detalhes.php?papel={ticker}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+    res = {"P/VP": None, "DY": None, "DL/EBITDA": None}
+    try:
+        r = requests.get(url, headers=headers, timeout=5)
+        r.encoding = 'iso-8859-1'  # Garante a leitura correta dos caracteres
+        html = r.text
+        
+        # P/VP
+        m_pvp = re.search(r'P/VP.*?<span class="txt">\s*(-?[0-9\.,]+)\s*</span>', html, re.IGNORECASE | re.DOTALL)
+        if m_pvp:
+            res["P/VP"] = float(m_pvp.group(1).replace('.', '').replace(',', '.'))
+            
+        # DY
+        m_dy = re.search(r'(?:Div\.? Yield|Dividend Yield).*?<span class="txt">\s*([0-9\.,]+)%\s*</span>', html, re.IGNORECASE | re.DOTALL)
+        if m_dy:
+            res["DY"] = float(m_dy.group(1).replace('.', '').replace(',', '.'))
+
+        # Dívida Líquida / EBITDA (Apenas para ações)
+        m_dle = re.search(r'Div.*?L[íi]q.*?EBITDA.*?<span class="txt">\s*(-?[0-9\.,]+)\s*</span>', html, re.IGNORECASE | re.DOTALL)
+        if m_dle:
+            res["DL/EBITDA"] = float(m_dle.group(1).replace('.', '').replace(',', '.'))
+            
+    except Exception:
+        pass
+    return res
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  API: Extração e Mesclagem de Dados
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _safe(val, default=0.0):
@@ -62,35 +99,40 @@ def extrair_acao(ticker):
     try:
         t = yf.Ticker(f"{ticker}.SA")
         info = t.info
-        hist = t.history(period="1y") # Baixa o histórico exato de 1 ano
+        hist = t.history(period="1y")
         
+        fundamentos = get_fundamentos_br(ticker)
+
+        # Cotação e Variação Real de 12 meses
         if hist.empty:
-            # Fallback caso o Yahoo falhe em puxar o histórico
             valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
             if valor == 0:
-                return {"Ticker": ticker.upper(), "_erro": "Sem dados no Yahoo Finance"}
+                return {"Ticker": ticker.upper(), "_erro": "Sem dados"}
             v12 = np.nan
-            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
             var12 = _safe(info.get("52WeekChange")) * 100
         else:
-            # Cálculos reai baseados no fechamento do mercado
             valor = float(hist["Close"].iloc[-1])
             price_1y_ago = float(hist["Close"].iloc[0])
-            
-            # Soma de todos os dividendos reais pagos em 1 ano
-            divs = float(hist["Dividends"].sum())
-            dy = (divs / valor) * 100 if valor > 0 else 0.0
-            
-            # Valorização real de ponta a ponta (12 meses)
             var12 = ((valor - price_1y_ago) / price_1y_ago) * 100 if price_1y_ago > 0 else 0.0
             v12 = price_1y_ago
 
-        pvp  = _safe(info.get("priceToBook"))
-        peg  = _safe(info.get("pegRatio"))
-        debt = _safe(info.get("totalDebt"))
-        cash = _safe(info.get("totalCash"))
-        ebit = _safe(info.get("ebitda"))
-        dle  = round((debt - cash) / ebit, 2) if ebit != 0 else 0.0
+        # Indicadores Fundamentais
+        pvp = fundamentos["P/VP"] if fundamentos["P/VP"] is not None else _safe(info.get("priceToBook"))
+        
+        if fundamentos["DY"] is not None:
+            dy = fundamentos["DY"]
+        else:
+            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
+
+        peg = _safe(info.get("pegRatio"))
+
+        if fundamentos["DL/EBITDA"] is not None:
+            dle = fundamentos["DL/EBITDA"]
+        else:
+            debt = _safe(info.get("totalDebt"))
+            cash = _safe(info.get("totalCash"))
+            ebit = _safe(info.get("ebitda"))
+            dle  = round((debt - cash) / ebit, 2) if ebit != 0 else 0.0
 
         return {
             "Ticker": ticker.upper(),
@@ -100,7 +142,7 @@ def extrair_acao(ticker):
             "Valorização 12m (%)": round(var12, 2),
             "P/VP": round(pvp, 2),
             "PEG Ratio": round(peg, 2),
-            "DL/EBITDA": dle,
+            "DL/EBITDA": round(dle, 2),
         }
     except Exception as e:
         return {"Ticker": ticker.upper(), "_erro": str(e)}
@@ -111,24 +153,28 @@ def extrair_fii(ticker):
         info = t.info
         hist = t.history(period="1y")
         
+        fundamentos = get_fundamentos_br(ticker)
+        
+        # Cotação e Variação Real de 12 meses
         if hist.empty:
             valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
             if valor == 0:
-                return {"Ticker": ticker.upper(), "_erro": "Sem dados no Yahoo Finance"}
+                return {"Ticker": ticker.upper(), "_erro": "Sem dados"}
             v12 = np.nan
-            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
             var12 = _safe(info.get("52WeekChange")) * 100
         else:
             valor = float(hist["Close"].iloc[-1])
             price_1y_ago = float(hist["Close"].iloc[0])
-            
-            divs = float(hist["Dividends"].sum())
-            dy = (divs / valor) * 100 if valor > 0 else 0.0
-            
             var12 = ((valor - price_1y_ago) / price_1y_ago) * 100 if price_1y_ago > 0 else 0.0
             v12 = price_1y_ago
 
-        pvp   = _safe(info.get("priceToBook"))
+        # Indicadores Fundamentais
+        pvp = fundamentos["P/VP"] if fundamentos["P/VP"] is not None else _safe(info.get("priceToBook"))
+        
+        if fundamentos["DY"] is not None:
+            dy = fundamentos["DY"]
+        else:
+            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
 
         return {
             "Ticker": ticker.upper(),
@@ -142,7 +188,7 @@ def extrair_fii(ticker):
         return {"Ticker": ticker.upper(), "_erro": str(e)}
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SCORES
+#  SCORES E CÁLCULOS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scores_fiis(df):
@@ -201,7 +247,7 @@ def parse_t(txt):
     return [l.strip().upper() for l in txt.replace(",","\n").splitlines() if l.strip()]
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SIDEBAR
+#  SIDEBAR E INTERFACE
 # ─────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -218,11 +264,7 @@ with st.sidebar:
     pos_file = st.file_uploader("pos", type=["xlsx"], label_visibility="collapsed")
     st.markdown("---")
     rodar = st.button("🚀 Rodar Análise", use_container_width=True)
-    st.caption("Fonte: Yahoo Finance · v4")
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  HEADER
-# ─────────────────────────────────────────────────────────────────────────────
+    st.caption("Fonte: Yahoo Finance + Fundamentus")
 
 st.markdown("""
 <div class="main-header">
@@ -256,7 +298,7 @@ if rodar:
         except Exception as e:
             st.warning(f"posicao.xlsx: {e}")
 
-    # Ações
+    # Processamento Ações
     if tickers:
         p = st.progress(0, text="Buscando ações…")
         dados, erros = [], []
@@ -280,7 +322,7 @@ if rodar:
             st.session_state.df_a  = None
         st.session_state.err_a = erros_ok
 
-    # FIIs
+    # Processamento FIIs
     if fiis:
         p = st.progress(0, text="Buscando FIIs…")
         dados, erros = [], []
@@ -308,7 +350,7 @@ if rodar:
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  RESULTADOS
+#  RESULTADOS E TABELAS
 # ─────────────────────────────────────────────────────────────────────────────
 
 da = st.session_state.df_a
@@ -329,7 +371,6 @@ if da is None and df is None:
         st.caption(f"**{t}** — {m}")
     st.stop()
 
-# Métricas
 c1,c2,c3,c4 = st.columns(4)
 c1.metric("Ações",  len(da) if da is not None else 0)
 c2.metric("Melhor (Ações)",  f"{int(da['SomaScore'].max())}/5"   if da is not None and len(da)>0 else "—")
@@ -344,7 +385,6 @@ if all_e:
 
 tab_a, tab_f, tab_r = st.tabs(["📋 Ações","🏢 FIIs","🏆 Ranking"])
 
-# ── Ações ─────────────────────────────────────────────────────────────────
 with tab_a:
     if da is None or len(da)==0:
         st.info("Sem dados de ações.")
@@ -370,7 +410,6 @@ with tab_a:
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "acoes.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── FIIs ──────────────────────────────────────────────────────────────────
 with tab_f:
     if df is None or len(df)==0:
         st.info("Sem dados de FIIs.")
@@ -395,7 +434,6 @@ with tab_f:
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "fiis.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Ranking ───────────────────────────────────────────────────────────────
 with tab_r:
     st.markdown("### 🏆 Top ativos por score")
     ca,cf = st.columns(2)
