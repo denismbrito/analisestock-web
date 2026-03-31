@@ -65,18 +65,18 @@ def get_indicadores_br(ticker):
         r.encoding = 'iso-8859-1'
         html = re.sub(r'\s+', ' ', r.text) # Facilita o regex em linha única
         
-        # P/VP
-        m_pvp = re.search(r'P/VP.*?</span> </td> <td.*?> <span.*?> ([0-9\.,\-]+) </span>', html, re.IGNORECASE)
+        # P/VP (Ajustado para ignorar espaços variados no HTML)
+        m_pvp = re.search(r'P/VP.*?<span[^>]*>\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE)
         if m_pvp and m_pvp.group(1) != '-':
             res["P/VP"] = float(m_pvp.group(1).replace('.', '').replace(',', '.'))
             
-        # DY
-        m_dy = re.search(r'Yield.*?</span> </td> <td.*?> <span.*?> ([0-9\.,\-]+)% </span>', html, re.IGNORECASE)
+        # DY (Ajustado para ler % corretamente de Ações e FIIs sem falhar por causa de espaços)
+        m_dy = re.search(r'Yield.*?<span[^>]*>\s*([0-9\.,\-]+)%\s*</span>', html, re.IGNORECASE)
         if m_dy and m_dy.group(1) != '-':
             res["DY"] = float(m_dy.group(1).replace('.', '').replace(',', '.'))
 
         # Dívida Líquida / EBITDA (Reconhece o '-' dos bancos para não pegar dados errados)
-        m_dle = re.search(r'Div.*?L[íi]q.*?EBITDA.*?</span> </td> <td.*?> <span.*?> ([0-9\.,\-]+) </span>', html, re.IGNORECASE)
+        m_dle = re.search(r'Div.*?L[íi]q.*?EBITDA.*?<span[^>]*>\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE)
         if m_dle:
             val = m_dle.group(1).strip()
             res["DL/EBITDA"] = 0.0 if val == '-' else float(val.replace('.', '').replace(',', '.'))
