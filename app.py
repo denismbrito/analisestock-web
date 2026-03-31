@@ -1,5 +1,5 @@
 """
-AnáliseStock — Web App Final (Híbrido Profissional + Cache Cloud)
+AnáliseStock — Web App Final (Híbrido Profissional + Cache + Highlights)
 """
 
 import streamlit as st
@@ -341,7 +341,7 @@ if rodar:
     st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  RESULTADOS E TABELAS
+#  RESULTADOS E TABELAS COM HIGHLIGHTS
 # ─────────────────────────────────────────────────────────────────────────────
 
 da = st.session_state.df_a
@@ -349,6 +349,10 @@ df = st.session_state.df_f
 
 if not st.session_state.rodou:
     st.info("👈 Insira os tickers na barra lateral e clique em **Rodar Análise Escalonável**.")
+    with st.expander("ℹ️ Critérios de Pontuação"):
+        c1,c2 = st.columns(2)
+        c1.markdown("**Ações (0–5)**\n| Score | Critério |\n|---|---|\n|ScoreEvolucao|Preço Atual < Preço 12m atrás|\n|ScorePreco|0,50 ≤ P/VP ≤ 1,5|\n|ScoreVariacao12m|1% ≤ Var 12m ≤ 15%|\n|ScorePeg|0,10 ≤ PEG ≤ 1,50|\n|ScoreAlavancagem|0,0 ≤ DL/EBITDA ≤ 3,0|")
+        c2.markdown("**FIIs (0–3)**\n| Score | Critério |\n|---|---|\n|ScoreEvolucao|Preço Atual < Preço 12m atrás|\n|ScorePreco|0,50 ≤ P/VP ≤ 1,05|\n|ScoreVariacao12m|1% ≤ Var 12m ≤ 15%|")
     st.stop()
 
 if da is None and df is None:
@@ -372,6 +376,7 @@ if all_e:
 
 tab_a, tab_f, tab_r = st.tabs(["📋 Ações","🏢 FIIs","🏆 Ranking"])
 
+# ── AÇÕES COM HIGHLIGHT ───────────────────────────────────────────────────
 with tab_a:
     if da is None or len(da)==0:
         st.info("Sem dados de ações.")
@@ -391,10 +396,36 @@ with tab_a:
         fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
               "P/VP":"{:.2f}","PEG Ratio":"{:.2f}","DL/EBITDA":"{:.2f}",
               "Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
-        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5),
-                     use_container_width=True, height=420)
+        
+        def highlight_acoes(subset_df):
+            """Pinta de verde as células que bateram o critério de score"""
+            styles = pd.DataFrame('', index=subset_df.index, columns=subset_df.columns)
+            if len(subset_df) == 0: return styles
+            
+            # Avalia as condições usando o dataframe mestre 'dv' para acessar a coluna oculta 'Valor 12m Atrás'
+            m_evol = dv.loc[subset_df.index, 'Valor Atual'] < dv.loc[subset_df.index, 'Valor 12m Atrás']
+            m_preco = (dv.loc[subset_df.index, 'P/VP'] >= 0.5) & (dv.loc[subset_df.index, 'P/VP'] <= 1.5)
+            m_var = (dv.loc[subset_df.index, 'Valorização 12m (%)'] >= 1) & (dv.loc[subset_df.index, 'Valorização 12m (%)'] <= 15)
+            m_peg = (dv.loc[subset_df.index, 'PEG Ratio'] >= 0.1) & (dv.loc[subset_df.index, 'PEG Ratio'] <= 1.5)
+            m_alav = (dv.loc[subset_df.index, 'DL/EBITDA'] >= 0.0) & (dv.loc[subset_df.index, 'DL/EBITDA'] <= 3.0)
+
+            bg = 'background-color: #bbf7d0; color: #166534;' # Verde claro bonito com texto escuro
+            
+            if 'Valor Atual' in styles.columns: styles.loc[m_evol, 'Valor Atual'] = bg
+            if 'P/VP' in styles.columns: styles.loc[m_preco, 'P/VP'] = bg
+            if 'Valorização 12m (%)' in styles.columns: styles.loc[m_var, 'Valorização 12m (%)'] = bg
+            if 'PEG Ratio' in styles.columns: styles.loc[m_peg, 'PEG Ratio'] = bg
+            if 'DL/EBITDA' in styles.columns: styles.loc[m_alav, 'DL/EBITDA'] = bg
+            
+            return styles
+
+        styled_df = dv[cs].style.format(fm).apply(highlight_acoes, axis=None).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5)
+        st.dataframe(styled_df, use_container_width=True, height=420)
+        
+        st.markdown('<div class="score-legend">🟩 <b>Célula verde</b> significa que o indicador bateu a meta para ganhar <b>+1 Ponto</b>. &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "acoes.xlsx")
 
+# ── FIIs COM HIGHLIGHT ────────────────────────────────────────────────────
 with tab_f:
     if df is None or len(df)==0:
         st.info("Sem dados de FIIs.")
@@ -413,8 +444,28 @@ with tab_f:
               "Qtd Atual","Rend. Mensal","Qtd Mágica","Nível Ating.","SomaScores"] if c in dv.columns]
         fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
               "P/VP":"{:.2f}","Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
-        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3),
-                     use_container_width=True, height=420)
+        
+        def highlight_fiis(subset_df):
+            """Pinta de verde as células que bateram o critério de score"""
+            styles = pd.DataFrame('', index=subset_df.index, columns=subset_df.columns)
+            if len(subset_df) == 0: return styles
+            
+            m_evol = dv.loc[subset_df.index, 'Valor Atual'] < dv.loc[subset_df.index, 'Valor 12m Atrás']
+            m_preco = (dv.loc[subset_df.index, 'P/VP'] >= 0.5) & (dv.loc[subset_df.index, 'P/VP'] <= 1.05)
+            m_var = (dv.loc[subset_df.index, 'Valorização 12m (%)'] >= 1) & (dv.loc[subset_df.index, 'Valorização 12m (%)'] <= 15)
+
+            bg = 'background-color: #bbf7d0; color: #166534;' 
+            
+            if 'Valor Atual' in styles.columns: styles.loc[m_evol, 'Valor Atual'] = bg
+            if 'P/VP' in styles.columns: styles.loc[m_preco, 'P/VP'] = bg
+            if 'Valorização 12m (%)' in styles.columns: styles.loc[m_var, 'Valorização 12m (%)'] = bg
+            
+            return styles
+
+        styled_df = dv[cs].style.format(fm).apply(highlight_fiis, axis=None).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3)
+        st.dataframe(styled_df, use_container_width=True, height=420)
+        
+        st.markdown('<div class="score-legend">🟩 <b>Célula verde</b> significa que o indicador bateu a meta para ganhar <b>+1 Ponto</b>. &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "fiis.xlsx")
 
 with tab_r:
