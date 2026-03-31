@@ -1,5 +1,5 @@
 """
-AnáliseStock — Web App Final (Motor de Extração Blindado via Status Invest)
+AnáliseStock — Web App Final (Dados Auditados via Fundamentus, Investidor10 e Yahoo Finance)
 """
 
 import streamlit as st
@@ -48,166 +48,174 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SCRAPERS BLINDADOS (STATUS INVEST -> FUNDAMENTUS)
+#  SCRAPER: Múltiplas Fontes (Fundamentus, Investidor10, StatusInvest)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def scrape_statusinvest(ticker, is_fii=False):
-    """Fonte Primária: Espelha 100% os dados do Status Invest"""
-    tipo = 'fundos-imobiliarios' if is_fii else 'acoes'
-    url = f"https://statusinvest.com.br/{tipo}/{ticker.lower()}"
-    
-    # Cabeçalhos para disfarçar o pedido e evitar bloqueios de Cloudflare/AWS na nuvem
+def get_indicadores_br(ticker):
+    """Busca P/VP, DY, DL/EBITDA e PEG de fontes confiáveis brasileiras"""
+    res = {"P/VP": None, "DY": None, "DL/EBITDA": None, "PEG": None}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Upgrade-Insecure-Requests": "1"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
     
-    res = {}
+    # 1. Fundamentus (P/VP, DY, DL/EBITDA)
     try:
-        r = requests.get(url, headers=headers, timeout=8)
-        if r.status_code == 200:
-            html = r.text
-            
-            # Preço Atual
-            m = re.search(r'title="Valor atual".*?<strong class="value">([0-9\.,\-]+)</strong>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['Valor Atual'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            # DY
-            m = re.search(r'<h3[^>]*>\s*D\.Y\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['DY (%)'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            # Valorização 12m
-            m = re.search(r'<h3[^>]*>\s*VALORIZAÇÃO \(12M\)\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['Valorização 12m (%)'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            # P/VP
-            m = re.search(r'<h3[^>]*>\s*P/VP\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['P/VP'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            if not is_fii:
-                # PEG Ratio
-                m = re.search(r'<h3[^>]*>\s*PEG Ratio\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', html, re.IGNORECASE | re.DOTALL)
-                if m and m.group(1).strip() != '-': res['PEG Ratio'] = float(m.group(1).replace('.', '').replace(',', '.'))
-                
-                # DL/EBITDA
-                m = re.search(r'<h3[^>]*>\s*DÍVIDA LÍQUIDA / EBITDA\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', html, re.IGNORECASE | re.DOTALL)
-                if m:
-                    val = m.group(1).strip()
-                    res['DL/EBITDA'] = 0.0 if val == '-' else float(val.replace('.', '').replace(',', '.'))
-    except Exception:
-        pass
-    return res
-
-def scrape_fundamentus(ticker, is_fii=False):
-    """Fonte Secundária: Fallback se o Status Invest falhar"""
-    url = f"https://www.fundamentus.com.br/detalhes.php?papel={ticker}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    res = {}
-    try:
-        r = requests.get(url, headers=headers, timeout=8)
-        if r.status_code == 200:
-            r.encoding = 'iso-8859-1'
-            html = r.text
-            
-            m = re.search(r'Cotação.*?<span class="txt">\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['Valor Atual'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            m = re.search(r'Yield.*?<span class="txt">\s*([0-9\.,\-]+)%\s*</span>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['DY (%)'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            m = re.search(r'12 meses.*?<span class="txt">(?:<font[^>]*>)?\s*([0-9\.,\-]+)%\s*(?:</font>)?\s*</span>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['Valorização 12m (%)'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            m = re.search(r'P/VP.*?<span class="txt">\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE | re.DOTALL)
-            if m and m.group(1).strip() != '-': res['P/VP'] = float(m.group(1).replace('.', '').replace(',', '.'))
-            
-            if not is_fii:
-                m = re.search(r'L[íi]q/EBITDA.*?<span class="txt">\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE | re.DOTALL)
-                if m:
-                    val = m.group(1).strip()
-                    res['DL/EBITDA'] = 0.0 if val == '-' else float(val.replace('.', '').replace(',', '.'))
-    except Exception:
-        pass
-    return res
-
-def obter_dados_reais(ticker, is_fii=False):
-    """Orquestrador: Junta Status Invest e Fundamentus com segurança máxima"""
-    dados = scrape_statusinvest(ticker, is_fii)
-    
-    campos_esperados = ['Valor Atual', 'DY (%)', 'Valorização 12m (%)', 'P/VP']
-    if not is_fii:
-        campos_esperados.extend(['PEG Ratio', 'DL/EBITDA'])
+        url_f = f"https://www.fundamentus.com.br/detalhes.php?papel={ticker}"
+        r = requests.get(url_f, headers=headers, timeout=5)
+        r.encoding = 'iso-8859-1'
+        html = re.sub(r'\s+', ' ', r.text) # Facilita o regex em linha única
         
-    # Se faltar algo crítico no Status Invest, complementa com Fundamentus
-    if not all(c in dados for c in campos_esperados):
-        dados_fund = scrape_fundamentus(ticker, is_fii)
-        for c in campos_esperados:
-            if c not in dados and c in dados_fund:
-                dados[c] = dados_fund[c]
-                
-    # Se o preço falhar completamente em ambos, tenta usar o Yahoo Finance apenas para a cotação em tempo real
-    if 'Valor Atual' not in dados:
+        # P/VP
+        m_pvp = re.search(r'P/VP.*?</span> </td> <td.*?> <span.*?> ([0-9\.,\-]+) </span>', html, re.IGNORECASE)
+        if m_pvp and m_pvp.group(1) != '-':
+            res["P/VP"] = float(m_pvp.group(1).replace('.', '').replace(',', '.'))
+            
+        # DY
+        m_dy = re.search(r'Yield.*?</span> </td> <td.*?> <span.*?> ([0-9\.,\-]+)% </span>', html, re.IGNORECASE)
+        if m_dy and m_dy.group(1) != '-':
+            res["DY"] = float(m_dy.group(1).replace('.', '').replace(',', '.'))
+
+        # Dívida Líquida / EBITDA (Reconhece o '-' dos bancos para não pegar dados errados)
+        m_dle = re.search(r'Div.*?L[íi]q.*?EBITDA.*?</span> </td> <td.*?> <span.*?> ([0-9\.,\-]+) </span>', html, re.IGNORECASE)
+        if m_dle:
+            val = m_dle.group(1).strip()
+            res["DL/EBITDA"] = 0.0 if val == '-' else float(val.replace('.', '').replace(',', '.'))
+    except Exception:
+        pass
+
+    # 2. Investidor10 (Focado em buscar o PEG Ratio)
+    try:
+        url_i = f"https://investidor10.com.br/acoes/{ticker}/"
+        r = requests.get(url_i, headers=headers, timeout=5)
+        m_peg = re.search(r'PEG RATIO.*?<span class="value">\s*([0-9\.,\-]+)\s*</span>', r.text, re.IGNORECASE | re.DOTALL)
+        if m_peg:
+            val = m_peg.group(1).strip()
+            if val != '-':
+                res["PEG"] = float(val.replace('.', '').replace(',', '.'))
+    except Exception:
+        pass
+
+    # 3. Status Invest (Fallback se o Investidor10 falhar no PEG Ratio)
+    if res["PEG"] is None:
         try:
-            p = yf.Ticker(f"{ticker}.SA").info.get("regularMarketPrice")
-            if p: dados['Valor Atual'] = float(p)
+            url_s = f"https://statusinvest.com.br/acoes/{ticker}"
+            r = requests.get(url_s, headers=headers, timeout=5)
+            m_peg = re.search(r'PEG Ratio.*?<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', r.text, re.IGNORECASE | re.DOTALL)
+            if m_peg:
+                val = m_peg.group(1).strip()
+                if val != '-':
+                    res["PEG"] = float(val.replace('.', '').replace(',', '.'))
         except Exception:
             pass
-            
-    return dados
+
+    return res
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  FORMATAÇÃO FINAL (SEM INVENTAR DADOS)
+#  API: Extração Híbrida e Mesclagem
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _safe(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return default if (math.isnan(f)) else f
+    except (TypeError, ValueError):
+        return default
 
 def extrair_acao(ticker):
-    d = obter_dados_reais(ticker, is_fii=False)
-    if 'Valor Atual' not in d:
-        return {"Ticker": ticker.upper(), "_erro": "Ativo não encontrado ou bloqueado temporariamente"}
+    try:
+        t = yf.Ticker(f"{ticker}.SA")
+        info = t.info
+        hist = t.history(period="1y")
+        
+        # Puxa indicadores blindados do mercado brasileiro
+        indicadores = get_indicadores_br(ticker)
 
-    # Se a métrica não existir em nenhum site, assume 0.0 (seguro para não gerar falso positivo no Score)
-    valor = d.get('Valor Atual', 0.0)
-    dy    = d.get('DY (%)', 0.0)
-    var12 = d.get('Valorização 12m (%)', 0.0)
-    pvp   = d.get('P/VP', 0.0)
-    peg   = d.get('PEG Ratio', 0.0)
-    dle   = d.get('DL/EBITDA', 0.0)
+        # Cotação e Variação Real de 12 meses
+        if hist.empty:
+            valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+            if valor == 0:
+                return {"Ticker": ticker.upper(), "_erro": "Sem dados"}
+            v12 = np.nan
+            var12 = _safe(info.get("52WeekChange")) * 100
+        else:
+            valor = float(hist["Close"].iloc[-1])
+            price_1y_ago = float(hist["Close"].iloc[0])
+            var12 = ((valor - price_1y_ago) / price_1y_ago) * 100 if price_1y_ago > 0 else 0.0
+            v12 = price_1y_ago
 
-    # Preço de 12 meses atrás calculado matematicamente para ser infalível
-    v12 = valor / (1 + var12 / 100) if var12 != -100 else np.nan
+        # Mesclagem: Usa site brasileiro primeiro, se falhar usa Yahoo
+        pvp = indicadores["P/VP"] if indicadores["P/VP"] is not None else _safe(info.get("priceToBook"))
+        
+        if indicadores["DY"] is not None:
+            dy = indicadores["DY"]
+        else:
+            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
 
-    return {
-        "Ticker": ticker.upper(),
-        "Valor Atual": valor,
-        "Valor 12m Atrás": v12,
-        "DY (%)": dy,
-        "Valorização 12m (%)": var12,
-        "P/VP": pvp,
-        "PEG Ratio": peg,
-        "DL/EBITDA": dle,
-    }
+        if indicadores["PEG"] is not None:
+            peg = indicadores["PEG"]
+        else:
+            peg = _safe(info.get("trailingPegRatio") or info.get("pegRatio"))
+
+        if indicadores["DL/EBITDA"] is not None:
+            dle = indicadores["DL/EBITDA"]
+        else:
+            debt = _safe(info.get("totalDebt"))
+            cash = _safe(info.get("totalCash"))
+            ebit = _safe(info.get("ebitda"))
+            dle  = round((debt - cash) / ebit, 2) if ebit != 0 else 0.0
+
+        return {
+            "Ticker": ticker.upper(),
+            "Valor Atual": valor,
+            "Valor 12m Atrás": v12,
+            "DY (%)": round(dy, 2),
+            "Valorização 12m (%)": round(var12, 2),
+            "P/VP": round(pvp, 2),
+            "PEG Ratio": round(peg, 2),
+            "DL/EBITDA": round(dle, 2),
+        }
+    except Exception as e:
+        return {"Ticker": ticker.upper(), "_erro": str(e)}
 
 def extrair_fii(ticker):
-    d = obter_dados_reais(ticker, is_fii=True)
-    if 'Valor Atual' not in d:
-        return {"Ticker": ticker.upper(), "_erro": "Ativo não encontrado ou bloqueado temporariamente"}
+    try:
+        t = yf.Ticker(f"{ticker}.SA")
+        info = t.info
+        hist = t.history(period="1y")
+        
+        indicadores = get_indicadores_br(ticker)
+        
+        if hist.empty:
+            valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+            if valor == 0:
+                return {"Ticker": ticker.upper(), "_erro": "Sem dados"}
+            v12 = np.nan
+            var12 = _safe(info.get("52WeekChange")) * 100
+        else:
+            valor = float(hist["Close"].iloc[-1])
+            price_1y_ago = float(hist["Close"].iloc[0])
+            var12 = ((valor - price_1y_ago) / price_1y_ago) * 100 if price_1y_ago > 0 else 0.0
+            v12 = price_1y_ago
 
-    valor = d.get('Valor Atual', 0.0)
-    dy    = d.get('DY (%)', 0.0)
-    var12 = d.get('Valorização 12m (%)', 0.0)
-    pvp   = d.get('P/VP', 0.0)
+        pvp = indicadores["P/VP"] if indicadores["P/VP"] is not None else _safe(info.get("priceToBook"))
+        
+        if indicadores["DY"] is not None:
+            dy = indicadores["DY"]
+        else:
+            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
 
-    v12 = valor / (1 + var12 / 100) if var12 != -100 else np.nan
-
-    return {
-        "Ticker": ticker.upper(),
-        "Valor Atual": valor,
-        "Valor 12m Atrás": v12,
-        "DY (%)": dy,
-        "Valorização 12m (%)": var12,
-        "P/VP": pvp,
-    }
+        return {
+            "Ticker": ticker.upper(),
+            "Valor Atual": valor,
+            "Valor 12m Atrás": v12,
+            "DY (%)": round(dy, 2),
+            "Valorização 12m (%)": round(var12, 2),
+            "P/VP": round(pvp, 2),
+        }
+    except Exception as e:
+        return {"Ticker": ticker.upper(), "_erro": str(e)}
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  SCORES E CÁLCULOS
@@ -286,7 +294,7 @@ with st.sidebar:
     pos_file = st.file_uploader("pos", type=["xlsx"], label_visibility="collapsed")
     st.markdown("---")
     rodar = st.button("🚀 Rodar Análise", use_container_width=True)
-    st.caption("Fonte: Status Invest + Fundamentus")
+    st.caption("Fonte: Web Scraping + Yahoo Finance")
 
 st.markdown("""
 <div class="main-header">
@@ -322,13 +330,13 @@ if rodar:
 
     # Processamento Ações
     if tickers:
-        p = st.progress(0, text="A procurar ações…")
+        p = st.progress(0, text="Buscando ações…")
         dados, erros = [], []
         for i, t in enumerate(tickers):
             p.progress((i+1)/len(tickers), text=f"🔍 {t}")
             r = extrair_acao(t)
             (erros if "_erro" in r else dados).append(r)
-            time.sleep(0.5) # Pequena pausa para evitar bloqueios do Status Invest
+            time.sleep(0.1)
         p.empty()
         
         dados_ok  = [r for r in dados if "_erro" not in r]
@@ -346,13 +354,13 @@ if rodar:
 
     # Processamento FIIs
     if fiis:
-        p = st.progress(0, text="A procurar FIIs…")
+        p = st.progress(0, text="Buscando FIIs…")
         dados, erros = [], []
         for i, t in enumerate(fiis):
             p.progress((i+1)/len(fiis), text=f"🔍 {t}")
             r = extrair_fii(t)
             (erros if "_erro" in r else dados).append(r)
-            time.sleep(0.5)
+            time.sleep(0.1)
         p.empty()
         
         dados_ok  = [r for r in dados if "_erro" not in r]
@@ -407,7 +415,6 @@ if all_e:
 
 tab_a, tab_f, tab_r = st.tabs(["📋 Ações","🏢 FIIs","🏆 Ranking"])
 
-# ── AÇÕES COM HIGHLIGHT ───────────────────────────────────────────────────
 with tab_a:
     if da is None or len(da)==0:
         st.info("Sem dados de ações.")
@@ -427,35 +434,12 @@ with tab_a:
         fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
               "P/VP":"{:.2f}","PEG Ratio":"{:.2f}","DL/EBITDA":"{:.2f}",
               "Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
-        
-        def highlight_acoes(subset_df):
-            styles = pd.DataFrame('', index=subset_df.index, columns=subset_df.columns)
-            if len(dv) == 0: return styles
-            
-            m_preco = (dv['P/VP'] >= 0.5) & (dv['P/VP'] <= 0.95)
-            m_var = (dv['Valorização 12m (%)'] >= 1) & (dv['Valorização 12m (%)'] <= 10)
-            m_peg = (dv['PEG Ratio'] >= 0.4) & (dv['PEG Ratio'] <= 1.0)
-            m_alav = (dv['DL/EBITDA'] >= 1.0) & (dv['DL/EBITDA'] <= 3.0)
-            m_evol = dv['Valor Atual'] < dv['Valor 12m Atrás']
-
-            bg = 'background-color: #bbf7d0; color: #166534;' 
-            
-            if 'P/VP' in styles.columns: styles.loc[m_preco, 'P/VP'] = bg
-            if 'Valorização 12m (%)' in styles.columns: styles.loc[m_var, 'Valorização 12m (%)'] = bg
-            if 'PEG Ratio' in styles.columns: styles.loc[m_peg, 'PEG Ratio'] = bg
-            if 'DL/EBITDA' in styles.columns: styles.loc[m_alav, 'DL/EBITDA'] = bg
-            if 'Valor Atual' in styles.columns: styles.loc[m_evol, 'Valor Atual'] = bg
-            
-            return styles
-
-        styled_df = dv[cs].style.format(fm).apply(highlight_acoes, axis=None).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5)
-        
-        st.dataframe(styled_df, use_container_width=True, height=420)
-        st.markdown('<div class="score-legend">🟢 <b>5</b> excelente &nbsp;|&nbsp; 🟡 <b>3</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo &nbsp;|&nbsp; 🟩 <b>Células verdes:</b> critério de score atingido &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
+        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5),
+                     use_container_width=True, height=420)
+        st.markdown('<div class="score-legend">🟢 <b>5</b> excelente &nbsp;|&nbsp; 🟡 <b>3</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo dos critérios &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "acoes.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── FIIS COM HIGHLIGHT ────────────────────────────────────────────────────
 with tab_f:
     if df is None or len(df)==0:
         st.info("Sem dados de FIIs.")
@@ -474,31 +458,12 @@ with tab_f:
               "Qtd Atual","Rend. Mensal","Qtd Mágica","Nível Ating.","SomaScores"] if c in dv.columns]
         fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
               "P/VP":"{:.2f}","Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
-        
-        def highlight_fiis(subset_df):
-            styles = pd.DataFrame('', index=subset_df.index, columns=subset_df.columns)
-            if len(dv) == 0: return styles
-            
-            m_preco = (dv['P/VP'] >= 0.5) & (dv['P/VP'] <= 0.95)
-            m_var = (dv['Valorização 12m (%)'] >= 1) & (dv['Valorização 12m (%)'] <= 10)
-            m_evol = dv['Valor Atual'] < dv['Valor 12m Atrás']
-
-            bg = 'background-color: #bbf7d0; color: #166534;' 
-            
-            if 'P/VP' in styles.columns: styles.loc[m_preco, 'P/VP'] = bg
-            if 'Valorização 12m (%)' in styles.columns: styles.loc[m_var, 'Valorização 12m (%)'] = bg
-            if 'Valor Atual' in styles.columns: styles.loc[m_evol, 'Valor Atual'] = bg
-            
-            return styles
-
-        styled_df = dv[cs].style.format(fm).apply(highlight_fiis, axis=None).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3)
-        
-        st.dataframe(styled_df, use_container_width=True, height=420)
-        st.markdown('<div class="score-legend">🟢 <b>3</b> excelente &nbsp;|&nbsp; 🟡 <b>2</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo &nbsp;|&nbsp; 🟩 <b>Células verdes:</b> critério de score atingido &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
+        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3),
+                     use_container_width=True, height=420)
+        st.markdown('<div class="score-legend">🟢 <b>3</b> excelente &nbsp;|&nbsp; 🟡 <b>2</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo dos critérios &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "fiis.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── RANKING GERAL ─────────────────────────────────────────────────────────
 with tab_r:
     st.markdown("### 🏆 Top ativos por score")
     ca,cf = st.columns(2)
