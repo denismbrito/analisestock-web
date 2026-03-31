@@ -1,5 +1,5 @@
 """
-AnáliseStock — Web App Final (Dados Auditados via Fundamentus, Investidor10 e Yahoo Finance)
+AnáliseStock — Web App Final (Dados Auditados + Destaque de Células)
 """
 
 import streamlit as st
@@ -415,6 +415,7 @@ if all_e:
 
 tab_a, tab_f, tab_r = st.tabs(["📋 Ações","🏢 FIIs","🏆 Ranking"])
 
+# ── AÇÕES COM HIGHLIGHT ───────────────────────────────────────────────────
 with tab_a:
     if da is None or len(da)==0:
         st.info("Sem dados de ações.")
@@ -434,12 +435,36 @@ with tab_a:
         fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
               "P/VP":"{:.2f}","PEG Ratio":"{:.2f}","DL/EBITDA":"{:.2f}",
               "Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
-        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5),
-                     use_container_width=True, height=420)
-        st.markdown('<div class="score-legend">🟢 <b>5</b> excelente &nbsp;|&nbsp; 🟡 <b>3</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo dos critérios &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
+        
+        # Função para aplicar estilo de fundo nas células que bateram o Score
+        def highlight_acoes(subset_df):
+            styles = pd.DataFrame('', index=subset_df.index, columns=subset_df.columns)
+            if len(dv) == 0: return styles
+            
+            m_preco = (dv['P/VP'] >= 0.5) & (dv['P/VP'] <= 0.95)
+            m_var = (dv['Valorização 12m (%)'] >= 1) & (dv['Valorização 12m (%)'] <= 10)
+            m_peg = (dv['PEG Ratio'] >= 0.4) & (dv['PEG Ratio'] <= 1.0)
+            m_alav = (dv['DL/EBITDA'] >= 1.0) & (dv['DL/EBITDA'] <= 3.0)
+            m_evol = dv['Valor Atual'] < dv['Valor 12m Atrás']
+
+            bg = 'background-color: #bbf7d0; color: #166534;' # Fundo verde claro
+            
+            if 'P/VP' in styles.columns: styles.loc[m_preco, 'P/VP'] = bg
+            if 'Valorização 12m (%)' in styles.columns: styles.loc[m_var, 'Valorização 12m (%)'] = bg
+            if 'PEG Ratio' in styles.columns: styles.loc[m_peg, 'PEG Ratio'] = bg
+            if 'DL/EBITDA' in styles.columns: styles.loc[m_alav, 'DL/EBITDA'] = bg
+            if 'Valor Atual' in styles.columns: styles.loc[m_evol, 'Valor Atual'] = bg
+            
+            return styles
+
+        styled_df = dv[cs].style.format(fm).apply(highlight_acoes, axis=None).background_gradient(subset=["SomaScore"],cmap="RdYlGn",vmin=0,vmax=5)
+        
+        st.dataframe(styled_df, use_container_width=True, height=420)
+        st.markdown('<div class="score-legend">🟢 <b>5</b> excelente &nbsp;|&nbsp; 🟡 <b>3</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo &nbsp;|&nbsp; 🟩 <b>Células verdes:</b> critério de score atingido &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "acoes.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# ── FIIS COM HIGHLIGHT ────────────────────────────────────────────────────
 with tab_f:
     if df is None or len(df)==0:
         st.info("Sem dados de FIIs.")
@@ -458,12 +483,32 @@ with tab_f:
               "Qtd Atual","Rend. Mensal","Qtd Mágica","Nível Ating.","SomaScores"] if c in dv.columns]
         fm = {k:v for k,v in {"Valor Atual":"R$ {:.2f}","DY (%)":"{:.2f}%","Valorização 12m (%)":"{:+.2f}%",
               "P/VP":"{:.2f}","Rend. Mensal":"R$ {:.4f}","Qtd Mágica":"{:.0f}"}.items() if k in dv.columns}
-        st.dataframe(dv[cs].style.format(fm).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3),
-                     use_container_width=True, height=420)
-        st.markdown('<div class="score-legend">🟢 <b>3</b> excelente &nbsp;|&nbsp; 🟡 <b>2</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo dos critérios &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
+        
+        # Função para aplicar estilo de fundo nas células que bateram o Score
+        def highlight_fiis(subset_df):
+            styles = pd.DataFrame('', index=subset_df.index, columns=subset_df.columns)
+            if len(dv) == 0: return styles
+            
+            m_preco = (dv['P/VP'] >= 0.5) & (dv['P/VP'] <= 0.95)
+            m_var = (dv['Valorização 12m (%)'] >= 1) & (dv['Valorização 12m (%)'] <= 10)
+            m_evol = dv['Valor Atual'] < dv['Valor 12m Atrás']
+
+            bg = 'background-color: #bbf7d0; color: #166534;' # Fundo verde claro
+            
+            if 'P/VP' in styles.columns: styles.loc[m_preco, 'P/VP'] = bg
+            if 'Valorização 12m (%)' in styles.columns: styles.loc[m_var, 'Valorização 12m (%)'] = bg
+            if 'Valor Atual' in styles.columns: styles.loc[m_evol, 'Valor Atual'] = bg
+            
+            return styles
+
+        styled_df = dv[cs].style.format(fm).apply(highlight_fiis, axis=None).background_gradient(subset=["SomaScores"],cmap="RdYlGn",vmin=0,vmax=3)
+        
+        st.dataframe(styled_df, use_container_width=True, height=420)
+        st.markdown('<div class="score-legend">🟢 <b>3</b> excelente &nbsp;|&nbsp; 🟡 <b>2</b> moderado &nbsp;|&nbsp; 🔴 <b>0-1</b> abaixo &nbsp;|&nbsp; 🟩 <b>Células verdes:</b> critério de score atingido &nbsp;|&nbsp; <b>Nível Ating.</b>: vezes que dividendos mensais cobrem 1 cota</div>', unsafe_allow_html=True)
         st.download_button("⬇️ Baixar (.xlsx)", para_excel(dv[cs]), "fiis.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# ── RANKING GERAL ─────────────────────────────────────────────────────────
 with tab_r:
     st.markdown("### 🏆 Top ativos por score")
     ca,cf = st.columns(2)
