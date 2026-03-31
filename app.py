@@ -1,6 +1,5 @@
 """
-AnáliseStock — Streamlit App v2
-Fonte de dados: brapi.dev (API REST — sem scraping, sem bloqueio de IP)
+AnáliseStock — Streamlit App v3 (Yahoo Finance)
 """
 
 import streamlit as st
@@ -9,7 +8,7 @@ import numpy as np
 import math
 import time
 import io
-import requests
+import yfinance as yf
 
 st.set_page_config(
     page_title="AnáliseStock",
@@ -47,50 +46,38 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  API brapi.dev
+#  API Yahoo Finance (Substituindo a Brapi)
 # ─────────────────────────────────────────────────────────────────────────────
 
-BRAPI = "https://brapi.dev/api"
-TOKEN = "3SnFK4ERHr4DLPUyMRp7Fx"
-
 def _safe(val, default=0.0):
+    if val is None:
+        return default
     try:
         f = float(val)
-        return default if (f != f) else f
+        return default if (math.isnan(f)) else f
     except (TypeError, ValueError):
         return default
 
-def _get(url):
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        return {"_erro": str(e)}
-
 def extrair_acao(ticker):
-    url  = f"{BRAPI}/quote/{ticker}?modules=defaultKeyStatistics,financialData&token={TOKEN}"
-    data = _get(url)
-    if "_erro" in data:
-        return {"Ticker": ticker.upper(), "_erro": data["_erro"]}
     try:
-        res   = data["results"][0]
-        stats = res.get("defaultKeyStatistics") or {}
-        fdata = res.get("financialData") or {}
+        # Adiciona .SA para buscar na bolsa brasileira (B3)
+        info = yf.Ticker(f"{ticker}.SA").info
+        
+        if not info or ("regularMarketPrice" not in info and "currentPrice" not in info):
+            return {"Ticker": ticker.upper(), "_erro": "Ativo não encontrado ou sem dados no Yahoo Finance"}
 
-        valor = _safe(res.get("regularMarketPrice"))
-        dy_f  = _safe(res.get("dividendYield") or stats.get("dividendYield"))
-        dy    = dy_f * 100 if dy_f < 1 else dy_f
+        valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+        dy    = _safe(info.get("dividendYield")) * 100
 
-        y_low = _safe(res.get("fiftyTwoWeekLow"))
+        y_low = _safe(info.get("fiftyTwoWeekLow"))
         var12 = round(((valor - y_low) / y_low) * 100, 2) if y_low > 0 and valor > 0 else 0.0
         v12   = valor / (1 + var12/100) if var12 != -100 else np.nan
 
-        pvp  = _safe(stats.get("priceToBook"))
-        peg  = _safe(stats.get("pegRatio"))
-        debt = _safe(fdata.get("totalDebt"))
-        cash = _safe(fdata.get("totalCash"))
-        ebit = _safe(fdata.get("ebitda"))
+        pvp  = _safe(info.get("priceToBook"))
+        peg  = _safe(info.get("pegRatio"))
+        debt = _safe(info.get("totalDebt"))
+        cash = _safe(info.get("totalCash"))
+        ebit = _safe(info.get("ebitda"))
         dle  = round((debt - cash) / ebit, 2) if ebit != 0 else 0.0
 
         return {
@@ -99,31 +86,30 @@ def extrair_acao(ticker):
             "Valor 12m Atrás": v12,
             "DY (%)": round(dy, 2),
             "Valorização 12m (%)": var12,
-            "Valorização Mês (%)": round(_safe(res.get("regularMarketChangePercent")), 2),
             "P/VP": round(pvp, 2),
             "PEG Ratio": round(peg, 2),
             "DL/EBITDA": dle,
         }
-    except (KeyError, IndexError) as e:
+    except Exception as e:
         return {"Ticker": ticker.upper(), "_erro": str(e)}
 
 def extrair_fii(ticker):
-    url  = f"{BRAPI}/quote/{ticker}?modules=defaultKeyStatistics&token={TOKEN}"
-    data = _get(url)
-    if "_erro" in data:
-        return {"Ticker": ticker.upper(), "_erro": data["_erro"]}
     try:
-        res   = data["results"][0]
-        stats = res.get("defaultKeyStatistics") or {}
+        info = yf.Ticker(f"{ticker}.SA").info
+        
+        if not info or ("regularMarketPrice" not in info and "currentPrice" not in info):
+            return {"Ticker": ticker.upper(), "_erro": "Ativo não encontrado ou sem dados no Yahoo Finance"}
 
-        valor = _safe(res.get("regularMarketPrice"))
-        dy_f  = _safe(res.get("dividendYield") or stats.get("dividendYield"))
-        dy    = dy_f * 100 if dy_f < 1 else dy_f
+        valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+        
+        # FIIs no Yahoo Finance às vezes salvam o DY em um campo diferente
+        dy_f  = info.get("dividendYield") or info.get("trailingAnnualDividendYield")
+        dy    = _safe(dy_f) * 100
 
-        y_low = _safe(res.get("fiftyTwoWeekLow"))
+        y_low = _safe(info.get("fiftyTwoWeekLow"))
         var12 = round(((valor - y_low) / y_low) * 100, 2) if y_low > 0 and valor > 0 else 0.0
         v12   = valor / (1 + var12/100) if var12 != -100 else np.nan
-        pvp   = _safe(stats.get("priceToBook"))
+        pvp   = _safe(info.get("priceToBook"))
 
         return {
             "Ticker": ticker.upper(),
@@ -131,10 +117,9 @@ def extrair_fii(ticker):
             "Valor 12m Atrás": v12,
             "DY (%)": round(dy, 2),
             "Valorização 12m (%)": var12,
-            "Valorização Mês (%)": round(_safe(res.get("regularMarketChangePercent")), 2),
             "P/VP": round(pvp, 2),
         }
-    except (KeyError, IndexError) as e:
+    except Exception as e:
         return {"Ticker": ticker.upper(), "_erro": str(e)}
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,7 +199,7 @@ with st.sidebar:
     pos_file = st.file_uploader("pos", type=["xlsx"], label_visibility="collapsed")
     st.markdown("---")
     rodar = st.button("🚀 Rodar Análise", use_container_width=True)
-    st.caption("Fonte: brapi.dev · v2")
+    st.caption("Fonte: Yahoo Finance · v3")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEADER
@@ -260,7 +245,7 @@ if rodar:
             p.progress((i+1)/len(tickers), text=f"🔍 {t}")
             r = extrair_acao(t)
             (erros if "_erro" in r else dados).append(r)
-            time.sleep(0.2)
+            time.sleep(0.1) # Yahoo finance é mais rápido, podemos diminuir o delay
         p.empty()
         
         dados_ok  = [r for r in dados if "_erro" not in r]
@@ -284,7 +269,7 @@ if rodar:
             p.progress((i+1)/len(fiis), text=f"🔍 {t}")
             r = extrair_fii(t)
             (erros if "_erro" in r else dados).append(r)
-            time.sleep(0.2)
+            time.sleep(0.1)
         p.empty()
         
         dados_ok  = [r for r in dados if "_erro" not in r]
