@@ -1,5 +1,5 @@
 """
-AnáliseStock — Streamlit App v3 (Yahoo Finance)
+AnáliseStock — Streamlit App v4 (Yahoo Finance c/ Histórico Real)
 """
 
 import streamlit as st
@@ -46,7 +46,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  API Yahoo Finance (Substituindo a Brapi)
+#  API Yahoo Finance (Cálculos Baseados no Histórico Real)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _safe(val, default=0.0):
@@ -60,18 +60,30 @@ def _safe(val, default=0.0):
 
 def extrair_acao(ticker):
     try:
-        # Adiciona .SA para buscar na bolsa brasileira (B3)
-        info = yf.Ticker(f"{ticker}.SA").info
+        t = yf.Ticker(f"{ticker}.SA")
+        info = t.info
+        hist = t.history(period="1y") # Baixa o histórico exato de 1 ano
         
-        if not info or ("regularMarketPrice" not in info and "currentPrice" not in info):
-            return {"Ticker": ticker.upper(), "_erro": "Ativo não encontrado ou sem dados no Yahoo Finance"}
-
-        valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
-        dy    = _safe(info.get("dividendYield")) * 100
-
-        y_low = _safe(info.get("fiftyTwoWeekLow"))
-        var12 = round(((valor - y_low) / y_low) * 100, 2) if y_low > 0 and valor > 0 else 0.0
-        v12   = valor / (1 + var12/100) if var12 != -100 else np.nan
+        if hist.empty:
+            # Fallback caso o Yahoo falhe em puxar o histórico
+            valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+            if valor == 0:
+                return {"Ticker": ticker.upper(), "_erro": "Sem dados no Yahoo Finance"}
+            v12 = np.nan
+            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
+            var12 = _safe(info.get("52WeekChange")) * 100
+        else:
+            # Cálculos reai baseados no fechamento do mercado
+            valor = float(hist["Close"].iloc[-1])
+            price_1y_ago = float(hist["Close"].iloc[0])
+            
+            # Soma de todos os dividendos reais pagos em 1 ano
+            divs = float(hist["Dividends"].sum())
+            dy = (divs / valor) * 100 if valor > 0 else 0.0
+            
+            # Valorização real de ponta a ponta (12 meses)
+            var12 = ((valor - price_1y_ago) / price_1y_ago) * 100 if price_1y_ago > 0 else 0.0
+            v12 = price_1y_ago
 
         pvp  = _safe(info.get("priceToBook"))
         peg  = _safe(info.get("pegRatio"))
@@ -85,7 +97,7 @@ def extrair_acao(ticker):
             "Valor Atual": valor,
             "Valor 12m Atrás": v12,
             "DY (%)": round(dy, 2),
-            "Valorização 12m (%)": var12,
+            "Valorização 12m (%)": round(var12, 2),
             "P/VP": round(pvp, 2),
             "PEG Ratio": round(peg, 2),
             "DL/EBITDA": dle,
@@ -95,20 +107,27 @@ def extrair_acao(ticker):
 
 def extrair_fii(ticker):
     try:
-        info = yf.Ticker(f"{ticker}.SA").info
+        t = yf.Ticker(f"{ticker}.SA")
+        info = t.info
+        hist = t.history(period="1y")
         
-        if not info or ("regularMarketPrice" not in info and "currentPrice" not in info):
-            return {"Ticker": ticker.upper(), "_erro": "Ativo não encontrado ou sem dados no Yahoo Finance"}
+        if hist.empty:
+            valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+            if valor == 0:
+                return {"Ticker": ticker.upper(), "_erro": "Sem dados no Yahoo Finance"}
+            v12 = np.nan
+            dy = _safe(info.get("dividendYield") or info.get("trailingAnnualDividendYield")) * 100
+            var12 = _safe(info.get("52WeekChange")) * 100
+        else:
+            valor = float(hist["Close"].iloc[-1])
+            price_1y_ago = float(hist["Close"].iloc[0])
+            
+            divs = float(hist["Dividends"].sum())
+            dy = (divs / valor) * 100 if valor > 0 else 0.0
+            
+            var12 = ((valor - price_1y_ago) / price_1y_ago) * 100 if price_1y_ago > 0 else 0.0
+            v12 = price_1y_ago
 
-        valor = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
-        
-        # FIIs no Yahoo Finance às vezes salvam o DY em um campo diferente
-        dy_f  = info.get("dividendYield") or info.get("trailingAnnualDividendYield")
-        dy    = _safe(dy_f) * 100
-
-        y_low = _safe(info.get("fiftyTwoWeekLow"))
-        var12 = round(((valor - y_low) / y_low) * 100, 2) if y_low > 0 and valor > 0 else 0.0
-        v12   = valor / (1 + var12/100) if var12 != -100 else np.nan
         pvp   = _safe(info.get("priceToBook"))
 
         return {
@@ -116,7 +135,7 @@ def extrair_fii(ticker):
             "Valor Atual": valor,
             "Valor 12m Atrás": v12,
             "DY (%)": round(dy, 2),
-            "Valorização 12m (%)": var12,
+            "Valorização 12m (%)": round(var12, 2),
             "P/VP": round(pvp, 2),
         }
     except Exception as e:
@@ -199,7 +218,7 @@ with st.sidebar:
     pos_file = st.file_uploader("pos", type=["xlsx"], label_visibility="collapsed")
     st.markdown("---")
     rodar = st.button("🚀 Rodar Análise", use_container_width=True)
-    st.caption("Fonte: Yahoo Finance · v3")
+    st.caption("Fonte: Yahoo Finance · v4")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEADER
@@ -245,7 +264,7 @@ if rodar:
             p.progress((i+1)/len(tickers), text=f"🔍 {t}")
             r = extrair_acao(t)
             (erros if "_erro" in r else dados).append(r)
-            time.sleep(0.1) # Yahoo finance é mais rápido, podemos diminuir o delay
+            time.sleep(0.1)
         p.empty()
         
         dados_ok  = [r for r in dados if "_erro" not in r]
