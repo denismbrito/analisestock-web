@@ -1,5 +1,5 @@
 """
-AnáliseStock — Web App Final (Arquitetura Profissional via API REST e Cache)
+AnáliseStock — Web App Final (Híbrido Profissional + Cache Cloud)
 """
 
 import streamlit as st
@@ -8,6 +8,16 @@ import numpy as np
 import math
 import io
 import requests
+import yfinance as yf
+import re
+
+# =============================================================================
+# CONFIGURAÇÃO DE ACESSO (SECRETS)
+# =============================================================================
+# Coloque sua chave da Brapi abaixo. 
+# NOTA: Se o plano for gratuito, a Brapi retornará HTTP 400 para fundamentos.
+# O aplicativo irá interceptar esse erro e acionar o Motor Híbrido automaticamente.
+BRAPI_TOKEN = "3SnFK4ERHr4DLPUyMRp7Fx" 
 
 st.set_page_config(
     page_title="AnáliseStock",
@@ -45,67 +55,131 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  API OFICIAL BRAPI COM CACHE (Solução para Múltiplos Usuários e IP Block)
+#  MOTOR HÍBRIDO E CACHE (Anti-Bloqueio IP e Alta Escalabilidade)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False) # Mantém os dados em memória por 1 hora
-def fetch_from_brapi(ticker, token):
-    """
-    Consome a API estruturada da Brapi. 
-    Se 10 usuários pesquisarem o mesmo ticker na mesma hora, a API só é chamada 1 vez.
-    """
-    url = f"https://brapi.dev/api/quote/{ticker}?range=1y&interval=1d&fundamental=true&dividends=true&token={token}"
+def get_indicadores_scraper(ticker, is_fii):
+    """Fallback Scraper silencioso para preencher buracos se a API falhar"""
+    res = {"P/VP": None, "DY": None, "DL/EBITDA": None, "PEG": None}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     
+    # 1. Status Invest
     try:
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            return {"_erro": f"Erro API: HTTP {r.status_code}"}
+        tipo = "fundos-imobiliarios" if is_fii else "acoes"
+        url = f"https://statusinvest.com.br/{tipo}/{ticker.lower()}"
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            m_dy = re.search(r'<h3[^>]*>\s*D\.Y\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)', r.text, re.IGNORECASE)
+            if m_dy and m_dy.group(1).strip() != '-': res["DY"] = float(m_dy.group(1).replace('.', '').replace(',', '.'))
+                
+            m_pvp = re.search(r'<h3[^>]*>\s*P/VP\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)', r.text, re.IGNORECASE)
+            if m_pvp and m_pvp.group(1).strip() != '-': res["P/VP"] = float(m_pvp.group(1).replace('.', '').replace(',', '.'))
+                
+            if not is_fii:
+                m_peg = re.search(r'<h3[^>]*>\s*PEG Ratio\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)', r.text, re.IGNORECASE)
+                if m_peg and m_peg.group(1).strip() != '-': res["PEG"] = float(m_peg.group(1).replace('.', '').replace(',', '.'))
+                m_dle = re.search(r'<h3[^>]*>\s*DÍVIDA LÍQUIDA / EBITDA\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)', r.text, re.IGNORECASE)
+                if m_dle and m_dle.group(1).strip() != '-': res["DL/EBITDA"] = float(m_dle.group(1).replace('.', '').replace(',', '.'))
+    except:
+        pass
+
+    # 2. Fundamentus
+    if None in res.values():
+        try:
+            url_f = f"https://www.fundamentus.com.br/fii_detalhes.php?papel={ticker}" if is_fii else f"https://www.fundamentus.com.br/detalhes.php?papel={ticker}"
+            r = requests.get(url_f, headers=headers, timeout=5)
+            r.encoding = 'iso-8859-1'
+            if res["P/VP"] is None:
+                m_pvp = re.search(r'P/VP.*?<span[^>]*>\s*([0-9\.,\-]+)\s*</span>', r.text, re.IGNORECASE | re.DOTALL)
+                if m_pvp and m_pvp.group(1) != '-': res["P/VP"] = float(m_pvp.group(1).replace('.', '').replace(',', '.'))
+        except:
+            pass
             
-        data = r.json().get("results", [])
-        if not data:
-            return {"_erro": "Ativo não encontrado"}
-            
-        ativo = data[0]
+    return res
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def obter_dados_ativo(ticker, is_fii=False, token=""):
+    """
+    Função principal de extração. Roda UMA VEZ por hora por ativo.
+    Suporta 10 a 1000 usuários simultâneos sem bloquear o IP.
+    """
+    # ==========================================
+    # 1. TENTATIVA VIA API BRAPI
+    # ==========================================
+    if token:
+        try:
+            url = f"https://brapi.dev/api/quote/{ticker}?range=1y&interval=1d&fundamental=true&dividends=true&token={token}"
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                data = r.json().get("results", [])
+                if data:
+                    ativo = data[0]
+                    hist = ativo.get("historicalDataPrice", [])
+                    valor_atual = ativo.get("regularMarketPrice", 0.0)
+                    preco_12m = hist[0].get("close", valor_atual) if hist else valor_atual
+                    var12m = ((valor_atual - preco_12m) / preco_12m) * 100 if preco_12m > 0 else 0.0
+                    
+                    dy = ativo.get("dividendYield", 0.0)
+                    pvp = ativo.get("priceToBookValueRatio", 0.0)
+                    peg = ativo.get("pegRatio", 0.0)
+                    dle = ativo.get("debtToEquity", 0.0)
+                    
+                    ret = {
+                        "Ticker": ticker.upper(),
+                        "Valor Atual": valor_atual,
+                        "Valor 12m Atrás": preco_12m,
+                        "DY (%)": round(dy, 2),
+                        "Valorização 12m (%)": round(var12m, 2),
+                        "P/VP": round(pvp, 2),
+                    }
+                    if not is_fii:
+                        ret["PEG Ratio"] = round(peg, 2)
+                        ret["DL/EBITDA"] = round(dle, 2)
+                    return ret
+        except:
+            pass # Se der HTTP 400 ou erro de rede, cai graciosamente para o Motor Híbrido
+
+    # ==========================================
+    # 2. FALLBACK MOTOR HÍBRIDO (YFinance + Scraper)
+    # ==========================================
+    try:
+        t = yf.Ticker(f"{ticker}.SA")
+        hist = t.history(period="1y")
         
-        # Preço Atual
-        valor_atual = ativo.get("regularMarketPrice", 0.0)
-        if valor_atual == 0:
+        if hist.empty:
             return {"_erro": "Cotação indisponível"}
-
-        # Histórico para cálculo EXATO da Variação de 12 meses
-        historical = ativo.get("historicalDataPrice", [])
-        if historical and len(historical) > 0:
-            preco_12m_atras = historical[0].get("close", valor_atual)
-            var12m = ((valor_atual - preco_12m_atras) / preco_12m_atras) * 100 if preco_12m_atras > 0 else 0.0
-        else:
-            preco_12m_atras = np.nan
-            var12m = 0.0
-
-        # Dividend Yield real calculado pelos dividendos pagos em dinheiro nos últimos 12m
-        dy_percent = ativo.get("dividendYield", 0.0)
-        if not dy_percent:
-            dividendos = ativo.get("dividendsData", {}).get("cashDividends", [])
-            total_div = sum([d.get("rate", 0) for d in dividendos])
-            dy_percent = (total_div / valor_atual) * 100 if valor_atual > 0 else 0.0
-
-        # P/VP, PEG, DL/EBITDA
-        pvp = ativo.get("priceToBookValueRatio", 0.0)
-        dle = ativo.get("debtToEquity", 0.0) 
-        peg = ativo.get("pegRatio", 0.0)
-
-        return {
+            
+        valor_atual = float(hist["Close"].iloc[-1])
+        preco_1y = float(hist["Close"].iloc[0])
+        var12m = ((valor_atual - preco_1y) / preco_1y) * 100 if preco_1y > 0 else 0.0
+        
+        # Busca Indicadores no Scraper
+        inds = get_indicadores_scraper(ticker, is_fii)
+        
+        # DY Exato: Se o Scraper falhar, soma matematicamente os dividendos reais dos últimos 12 meses
+        dy = inds.get("DY")
+        if dy is None:
+            hist_divs = hist["Dividends"] if "Dividends" in hist.columns else []
+            soma_divs = sum(hist_divs)
+            dy = (soma_divs / valor_atual) * 100 if valor_atual > 0 else 0.0
+            
+        ret = {
             "Ticker": ticker.upper(),
             "Valor Atual": valor_atual,
-            "Valor 12m Atrás": preco_12m_atras,
-            "DY (%)": round(dy_percent, 2),
+            "Valor 12m Atrás": preco_1y,
+            "DY (%)": round(dy, 2),
             "Valorização 12m (%)": round(var12m, 2),
-            "P/VP": round(pvp, 2),
-            "PEG Ratio": round(peg, 2),
-            "DL/EBITDA": round(dle, 2),
+            "P/VP": round(inds.get("P/VP") or 0.0, 2),
         }
-
+        if not is_fii:
+            ret["PEG Ratio"] = round(inds.get("PEG") or 0.0, 2)
+            ret["DL/EBITDA"] = round(inds.get("DL/EBITDA") or 0.0, 2)
+            
+        return ret
     except Exception as e:
-        return {"_erro": f"Falha de conexão: {str(e)}"}
+        return {"_erro": f"Erro de processamento: {str(e)}"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  SCORES E CÁLCULOS
@@ -152,7 +226,7 @@ def mesclar(df, df_pos):
         m = pd.merge(df, p, on="Ticker", how="left")
         m["Qtd Atual"] = m["Qtd Atual"].fillna(0)
         return m
-    except Exception:
+    except:
         df["Qtd Atual"] = 0
         return df
 
@@ -171,10 +245,6 @@ def parse_t(txt):
 
 with st.sidebar:
     st.markdown("## 📊 AnáliseStock Pro")
-    
-    # Campo para Token Oficial
-    api_token = st.text_input("🔑 Token Brapi.dev (Obrigatório)", type="password", help="Crie uma conta gratuita em brapi.dev para obter acesso estável.")
-    
     st.markdown("---")
     st.markdown("### 🎯 Ações")
     t_in = st.text_area("t", value="AURE3\nBBAS3\nBBDC4\nEGIE3\nITUB4\nVALE3",
@@ -191,7 +261,7 @@ with st.sidebar:
 st.markdown("""
 <div class="main-header">
   <h1>📈 AnáliseStock Pro</h1>
-  <p>Arquitetura Cloud via API Brapi · Resistente a bloqueios IP · Cache multi-usuário</p>
+  <p>Arquitetura Cloud Híbrida · Resistente a bloqueios IP · Cache multi-usuário</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -205,10 +275,6 @@ for k, v in [("df_a",None),("df_f",None),("err_a",[]),("err_f",[]),("rodou",Fals
 # ─────────────────────────────────────────────────────────────────────────────
 
 if rodar:
-    if not api_token:
-        st.error("⚠️ Para uso profissional e sem falhas, é necessário inserir o Token gratuito da Brapi.dev na barra lateral.")
-        st.stop()
-        
     tickers = parse_t(t_in)
     fiis    = parse_t(f_in)
     
@@ -222,16 +288,16 @@ if rodar:
             pos_a = pd.read_excel(pos_file, sheet_name="Acoes")
             pos_file.seek(0)
             pos_f = pd.read_excel(pos_file, sheet_name="Fundo de Investimento")
-        except Exception:
+        except:
             pass
 
     # AÇÕES
     if tickers:
-        p = st.progress(0, text="Processando ações via API...")
+        p = st.progress(0, text="Processando ações via Nuvem...")
         dados, erros = [], []
         for i, t in enumerate(tickers):
             p.progress((i+1)/len(tickers), text=f"⚡ Consultando {t}")
-            r = fetch_from_brapi(t, api_token)
+            r = obter_dados_ativo(t, is_fii=False, token=BRAPI_TOKEN)
             if "_erro" in r:
                 erros.append({"Ticker": t, "_erro": r["_erro"]})
             else:
@@ -250,16 +316,14 @@ if rodar:
 
     # FIIs
     if fiis:
-        p = st.progress(0, text="Processando FIIs via API...")
+        p = st.progress(0, text="Processando FIIs via Nuvem...")
         dados, erros = [], []
         for i, t in enumerate(fiis):
             p.progress((i+1)/len(fiis), text=f"⚡ Consultando {t}")
-            r = fetch_from_brapi(t, api_token)
+            r = obter_dados_ativo(t, is_fii=True, token=BRAPI_TOKEN)
             if "_erro" in r:
                 erros.append({"Ticker": t, "_erro": r["_erro"]})
             else:
-                r.pop("PEG Ratio", None)
-                r.pop("DL/EBITDA", None)
                 dados.append(r)
         p.empty()
         
@@ -284,12 +348,12 @@ da = st.session_state.df_a
 df = st.session_state.df_f
 
 if not st.session_state.rodou:
-    st.info("👈 Insira os tickers e seu Token na barra lateral e clique em **Rodar Análise Escalonável**.")
+    st.info("👈 Insira os tickers na barra lateral e clique em **Rodar Análise Escalonável**.")
     st.stop()
 
 if da is None and df is None:
     all_e = st.session_state.err_a + st.session_state.err_f
-    st.error("❌ Nenhum dado retornado da API.")
+    st.error("❌ Nenhum dado retornado.")
     for t,m in all_e:
         st.caption(f"**{t}** — {m}")
     st.stop()
