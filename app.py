@@ -60,22 +60,29 @@ def get_indicadores_br(ticker):
     
     # 1. Fundamentus (P/VP, DY, DL/EBITDA)
     try:
+        # Tenta a página de Ações primeiro
         url_f = f"https://www.fundamentus.com.br/detalhes.php?papel={ticker}"
         r = requests.get(url_f, headers=headers, timeout=5)
+        
+        # O Fundamentus possui uma página separada para FIIs. Se a busca padrão falhar, direciona para a URL de FIIs.
+        if "P/VP" not in r.text and "Dividend Yield" not in r.text:
+            url_f = f"https://www.fundamentus.com.br/fii_detalhes.php?papel={ticker}"
+            r = requests.get(url_f, headers=headers, timeout=5)
+            
         r.encoding = 'iso-8859-1'
         html = re.sub(r'\s+', ' ', r.text) # Facilita o regex em linha única
         
-        # P/VP (Ajustado para ignorar espaços variados no HTML)
+        # P/VP
         m_pvp = re.search(r'P/VP.*?<span[^>]*>\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE)
         if m_pvp and m_pvp.group(1) != '-':
             res["P/VP"] = float(m_pvp.group(1).replace('.', '').replace(',', '.'))
             
-        # DY (Ajustado para ler % corretamente de Ações e FIIs sem falhar por causa de espaços)
-        m_dy = re.search(r'Yield.*?<span[^>]*>\s*([0-9\.,\-]+)%\s*</span>', html, re.IGNORECASE)
+        # DY (Lê corretamente % de Ações e FIIs tolerando espaços)
+        m_dy = re.search(r'(?:Yield|Yeld).*?<span[^>]*>\s*([0-9\.,\-]+)\s*%\s*</span>', html, re.IGNORECASE)
         if m_dy and m_dy.group(1) != '-':
             res["DY"] = float(m_dy.group(1).replace('.', '').replace(',', '.'))
 
-        # Dívida Líquida / EBITDA (Reconhece o '-' dos bancos para não pegar dados errados)
+        # Dívida Líquida / EBITDA (Reconhece o '-' dos bancos)
         m_dle = re.search(r'Div.*?L[íi]q.*?EBITDA.*?<span[^>]*>\s*([0-9\.,\-]+)\s*</span>', html, re.IGNORECASE)
         if m_dle:
             val = m_dle.group(1).strip()
@@ -83,7 +90,24 @@ def get_indicadores_br(ticker):
     except Exception:
         pass
 
-    # 2. Investidor10 (Focado em buscar o PEG Ratio)
+    # 2. Status Invest (Fallback Blindado: Traz o DY exato se o Fundamentus falhar)
+    if res["DY"] is None:
+        try:
+            url_s = f"https://statusinvest.com.br/fundos-imobiliarios/{ticker.lower()}"
+            r = requests.get(url_s, headers=headers, timeout=5)
+            if r.status_code == 404: # Se não for FII, tenta como Ação
+                url_s = f"https://statusinvest.com.br/acoes/{ticker.lower()}"
+                r = requests.get(url_s, headers=headers, timeout=5)
+                
+            m_dy = re.search(r'<h3[^>]*>\s*D\.Y\s*</h3>\s*<strong[^>]*>\s*([0-9\.,\-]+)\s*</strong>', r.text, re.IGNORECASE | re.DOTALL)
+            if m_dy:
+                val = m_dy.group(1).strip()
+                if val != '-':
+                    res["DY"] = float(val.replace('.', '').replace(',', '.'))
+        except Exception:
+            pass
+
+    # 3. Investidor10 (Focado em buscar o PEG Ratio)
     try:
         url_i = f"https://investidor10.com.br/acoes/{ticker}/"
         r = requests.get(url_i, headers=headers, timeout=5)
@@ -95,7 +119,7 @@ def get_indicadores_br(ticker):
     except Exception:
         pass
 
-    # 3. Status Invest (Fallback se o Investidor10 falhar no PEG Ratio)
+    # 4. Status Invest (Fallback se o Investidor10 falhar no PEG Ratio)
     if res["PEG"] is None:
         try:
             url_s = f"https://statusinvest.com.br/acoes/{ticker}"
