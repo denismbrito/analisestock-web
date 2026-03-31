@@ -6,7 +6,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import math
-import time
 import io
 import requests
 
@@ -83,30 +82,16 @@ def fetch_from_brapi(ticker, token):
             var12m = 0.0
 
         # Dividend Yield real calculado pelos dividendos pagos em dinheiro nos últimos 12m
-        dy_percent = ativo.get("dividendYield", 0.0) # Algumas vezes a API já traz o DY
+        dy_percent = ativo.get("dividendYield", 0.0)
         if not dy_percent:
-            # Cálculo de backup via dinheiro pago
             dividendos = ativo.get("dividendsData", {}).get("cashDividends", [])
             total_div = sum([d.get("rate", 0) for d in dividendos])
             dy_percent = (total_div / valor_atual) * 100 if valor_atual > 0 else 0.0
 
         # P/VP, PEG, DL/EBITDA
-        pvp = 0.0
-        peg = 0.0
-        dle = 0.0
-        
-        # Nem todos os ativos (ex: FIIs) retornam a chave priceToBookValueRatio imediatamente
-        # Mas vamos capturar se existir
         pvp = ativo.get("priceToBookValueRatio", 0.0)
-        
-        # Dados de Dívida / PEG
-        dle = ativo.get("debtToEquity", 0.0) # DL/EBITDA é frequentemente mapeado perto de Equity
+        dle = ativo.get("debtToEquity", 0.0) 
         peg = ativo.get("pegRatio", 0.0)
-
-        # Trata FIIs que não enviam P/VP explícito na raiz, calculando VPA se possível
-        if pvp == 0.0:
-            vpa = ativo.get("regularMarketVolume", 0) # Failsafe
-            # A Brapi pro pode fornecer mais detalhes fundamentais, mas extraímos o principal
 
         return {
             "Ticker": ticker.upper(),
@@ -129,7 +114,7 @@ def fetch_from_brapi(ticker, token):
 def scores_fiis(df):
     df = df.copy()
     df["ScoreEvolucao"]    = np.where(df["Valor Atual"] < df["Valor 12m Atrás"], 1, 0)
-    df["ScorePreco"]       = np.where((df["P/VP"] >= 0.5) & (df["P/VP"] <= 1.05), 1, 0) # Ampliei levemente o P/VP
+    df["ScorePreco"]       = np.where((df["P/VP"] >= 0.5) & (df["P/VP"] <= 1.05), 1, 0)
     df["ScoreVariacao12m"] = np.where((df["Valorização 12m (%)"] >= 1) & (df["Valorização 12m (%)"] <= 15), 1, 0)
     df["SomaScores"]       = df[["ScoreEvolucao", "ScorePreco", "ScoreVariacao12m"]].sum(axis=1)
     return df
@@ -167,7 +152,7 @@ def mesclar(df, df_pos):
         m = pd.merge(df, p, on="Ticker", how="left")
         m["Qtd Atual"] = m["Qtd Atual"].fillna(0)
         return m
-    except Exception as e:
+    except Exception:
         df["Qtd Atual"] = 0
         return df
 
@@ -206,7 +191,7 @@ with st.sidebar:
 st.markdown("""
 <div class="main-header">
   <h1>📈 AnáliseStock Pro</h1>
-  <p>Arquitetura Cloud via API Brapi · Resistente a bloqueios IP · Cache multi-usuário (até 10+ concorrências)</p>
+  <p>Arquitetura Cloud via API Brapi · Resistente a bloqueios IP · Cache multi-usuário</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -273,7 +258,6 @@ if rodar:
             if "_erro" in r:
                 erros.append({"Ticker": t, "_erro": r["_erro"]})
             else:
-                # FIIs removem PEG e DL/EBITDA
                 r.pop("PEG Ratio", None)
                 r.pop("DL/EBITDA", None)
                 dados.append(r)
@@ -300,7 +284,7 @@ da = st.session_state.df_a
 df = st.session_state.df_f
 
 if not st.session_state.rodou:
-    st.info("👈 Insira os tickers e seu Token na barra lateral e clique em **Rodar Análise**.")
+    st.info("👈 Insira os tickers e seu Token na barra lateral e clique em **Rodar Análise Escalonável**.")
     st.stop()
 
 if da is None and df is None:
